@@ -1,0 +1,6 @@
+{
+  "name": "Street Justice - 3D Mobile Action Adventure",
+  "description": "A fictional mobile 3D crime-action adventure shooting game. Patrol the city as Officer Alex Carter, engage criminal syndicates, drive police cruisers, and restore peace to the urban districts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
