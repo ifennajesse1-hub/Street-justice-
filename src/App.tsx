@@ -4,10 +4,10 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { RotateCw } from 'lucide-react';
 import { GameEngine } from './game/engine/GameEngine';
 import { INITIAL_PLAYER_STATS, getRankForXP } from './game/systems/ProgressionSystem';
 import { INITIAL_WEAPONS } from './game/systems/WeaponsData';
-import { STORY_MISSIONS } from './game/systems/MissionSystem';
 import {
   PlayerStats,
   WeaponConfig,
@@ -20,12 +20,22 @@ import {
   EnemyEntity,
   CivilianEntity,
   PoliceNPCEntity,
+  MilitaryNPCEntity,
   EvidenceItem,
   DynamicEvent,
 } from './types/game';
 import { CRIME_CASES, INITIAL_EVIDENCE_ITEMS, CrimeCase } from './game/systems/InvestigationSystem';
-import { generateRandomCityEvent } from './game/systems/DynamicEventsSystem';
+import { generateRandomCityEvent, cityIncidentManager } from './game/systems/DynamicEventsSystem';
+import { STORY_MISSIONS, generateRandomPoliceMission } from './game/systems/MissionSystem';
+import { authoritativeEncounterManager } from './game/systems/EncounterManager';
 import { soundEngine } from './game/audio/SoundEffects';
+import { auth, loginWithGoogle, logoutUser, testConnection } from './lib/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import {
+  fetchPlayerProfile,
+  createPlayerProfile,
+  updatePlayerProfile,
+} from './game/systems/PlayerFirestoreService';
 import { HUD } from './components/HUD';
 import { TouchControls } from './components/TouchControls';
 import { PauseMenu } from './components/PauseMenu';
@@ -77,6 +87,7 @@ export default function App() {
 
   // Dynamic 911 Calls
   const [activeDynamicEvent, setActiveDynamicEvent] = useState<DynamicEvent | null>(null);
+  const [activeIncidentObjective, setActiveIncidentObjective] = useState<DynamicEvent | null>(null);
 
   // Modals & Overlays
   const [isMainMenuOpen, setIsMainMenuOpen] = useState<boolean>(false);
@@ -89,6 +100,7 @@ export default function App() {
   const [activeCivilian, setActiveCivilian] = useState<CivilianEntity | null>(null);
   const [civilians, setCivilians] = useState<CivilianEntity[]>([]);
   const [policeNPCs, setPoliceNPCs] = useState<PoliceNPCEntity[]>([]);
+  const [militarySoldiers, setMilitarySoldiers] = useState<MilitaryNPCEntity[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
   const [isCasesOpen, setIsCasesOpen] = useState<boolean>(false);
 
@@ -105,40 +117,345 @@ export default function App() {
     vehicleColor: '#ffffff',
     sirenType: 'classic',
   });
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('night');
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('day');
   const [weather, setWeather] = useState<WeatherType>('clear');
+
+  // Firebase Auth & Cloud Firestore State
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'saving' | 'offline'>('synced');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const isLoadedRef = useRef<boolean>(false);
+
+  // Landscape Orientation State for Mobile Full-Screen Layout
+  const [isPortrait, setIsPortrait] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerHeight > window.innerWidth && window.innerWidth < 900;
+    }
+    return false;
+  });
 
   const [notifications, setNotifications] = useState<
     { text: string; type: 'info' | 'alert' | 'success'; id: string }[]
-  >([
-    {
-      id: 'init_1',
-      text: 'Dispatch: "Officer Carter, Sector 4 commercial district is active. Check your tactical radar."',
-      type: 'info',
-    },
-  ]);
+  >([]);
 
   const currentMission = missions.find((m) => m.id === currentMissionId);
 
-  // Add notification helper
-  const addNotification = (text: string, type: 'info' | 'alert' | 'success' = 'info') => {
+  // Add temporary dialogue/comms notification (auto-dismisses after 3.5s so it never clutters screen)
+  const addNotification = useCallback((text: string, type: 'info' | 'alert' | 'success' = 'info') => {
     const id = `notif_${Date.now()}_${Math.random()}`;
-    setNotifications((prev) => [...prev.slice(-3), { id, text, type }]);
+    setNotifications([{ id, text, type }]);
     soundEngine.playRadioChime();
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 3500);
+  }, []);
+
+  // Request Landscape Fullscreen
+  const handleToggleFullscreen = useCallback(() => {
+    try {
+      if (!document.fullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+        if (window.screen?.orientation && 'lock' in window.screen.orientation) {
+          (window.screen.orientation as any).lock('landscape').catch(() => {});
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Window resize & orientation tracking
+  useEffect(() => {
+    const checkOrientation = () => {
+      const portrait = window.innerHeight > window.innerWidth && window.innerWidth < 900;
+      setIsPortrait(portrait);
+      if (engineRef.current && containerRef.current) {
+        engineRef.current.handleResize();
+      }
+    };
+
+    window.addEventListener('resize', checkOrientation);
+    window.addEventListener('orientationchange', checkOrientation);
+    return () => {
+      window.removeEventListener('resize', checkOrientation);
+      window.removeEventListener('orientationchange', checkOrientation);
+    };
+  }, []);
+
+  // Persist player progress to Cloud Firestore & LocalStorage
+  const persistProgressToCloud = useCallback(
+    async (
+      customStats?: PlayerStats,
+      customWeapons?: WeaponConfig[],
+      customMissions?: Mission[],
+      customCases?: CrimeCase[],
+      customSettings?: CustomizationSettings
+    ) => {
+      const curStats = customStats || stats;
+      const curWeapons = customWeapons || weapons;
+      const curMissions = customMissions || missions;
+      const curCases = customCases || cases;
+      const curCustomization = customSettings || customization;
+
+      // Always save locally so guest officers keep their career progress
+      try {
+        localStorage.setItem(
+          'street_justice_local_profile',
+          JSON.stringify({
+            stats: curStats,
+            weapons: curWeapons,
+            missions: curMissions,
+            cases: curCases,
+            customization: curCustomization,
+            savedAt: new Date().toISOString(),
+          })
+        );
+        setLastSavedAt(new Date());
+      } catch (err) {
+        // Storage unavailable or quota limit
+      }
+
+      const user = auth.currentUser;
+      if (!user) {
+        setCloudSyncStatus('offline');
+        return;
+      }
+
+      setCloudSyncStatus('saving');
+      try {
+        await updatePlayerProfile(
+          user.uid,
+          curStats,
+          curWeapons,
+          curMissions,
+          curCases,
+          curCustomization
+        );
+        setCloudSyncStatus('synced');
+        setLastSavedAt(new Date());
+      } catch (err) {
+        console.error('Failed to sync progress to Cloud Firestore:', err);
+        setCloudSyncStatus('offline');
+      }
+    },
+    [stats, weapons, missions, cases, customization]
+  );
+
+  // Initialize Firebase Auth listener and Cloud Firestore load
+  useEffect(() => {
+    testConnection();
+
+    // Restore locally saved profile if available
+    try {
+      const savedLocal = localStorage.getItem('street_justice_local_profile');
+      if (savedLocal) {
+        const parsed = JSON.parse(savedLocal);
+        if (parsed.stats) {
+          setStats((prev) => ({ ...prev, ...parsed.stats }));
+          if (engineRef.current) {
+            engineRef.current.stats = { ...engineRef.current.stats, ...parsed.stats };
+          }
+        }
+        if (parsed.weapons) {
+          setWeapons(parsed.weapons);
+          if (engineRef.current) engineRef.current.weapons = parsed.weapons;
+        }
+        if (parsed.missions) setMissions(parsed.missions);
+        if (parsed.cases) setCases(parsed.cases);
+        if (parsed.customization) setCustomization(parsed.customization);
+        if (parsed.savedAt) setLastSavedAt(new Date(parsed.savedAt));
+      }
+    } catch (e) {
+      // Local storage read error
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setAuthUser(null);
+        setCloudSyncStatus('offline');
+        isLoadedRef.current = true;
+        return;
+      }
+
+      setAuthUser(user);
+      setCloudSyncStatus('saving');
+
+      try {
+        const cloudProfile = await fetchPlayerProfile(user.uid);
+        if (cloudProfile) {
+          // Restore stats
+          setStats((prev) => {
+            const newStats: PlayerStats = {
+              ...prev,
+              money: cloudProfile.money ?? prev.money,
+              xp: cloudProfile.xp ?? prev.xp,
+              rank: cloudProfile.rank ?? prev.rank,
+              rankName: cloudProfile.rankName ?? prev.rankName,
+              reputation: cloudProfile.reputation ?? prev.reputation,
+              kills: cloudProfile.kills ?? prev.kills,
+              arrests: cloudProfile.arrests ?? prev.arrests,
+              missionsCompleted: cloudProfile.missionsCompleted ?? prev.missionsCompleted,
+              civiliansRescued: cloudProfile.civiliansRescued ?? prev.civiliansRescued,
+              evidenceFound: cloudProfile.evidenceFound ?? prev.evidenceFound,
+              iaViolations: cloudProfile.iaViolations ?? prev.iaViolations,
+            };
+            if (engineRef.current) {
+              engineRef.current.stats = { ...newStats };
+            }
+            return newStats;
+          });
+
+          // Restore unlocked weapons & upgrade marks
+          if (cloudProfile.unlockedWeapons?.length) {
+            setWeapons((prev) => {
+              const updated = prev.map((w) => {
+                const isUnlocked = cloudProfile.unlockedWeapons.includes(w.id);
+                const upgradeLvl = cloudProfile.weaponUpgradeLevels?.[w.id] ?? w.upgradeLevel;
+                let dmg = w.damage;
+                let fr = w.fireRate;
+                if (upgradeLvl > 1) {
+                  for (let i = 1; i < upgradeLvl; i++) {
+                    dmg = Math.round(dmg * 1.25);
+                    fr = parseFloat((fr * 1.1).toFixed(1));
+                  }
+                }
+                return {
+                  ...w,
+                  unlocked: isUnlocked,
+                  upgradeLevel: upgradeLvl,
+                  damage: dmg,
+                  fireRate: fr,
+                };
+              });
+              if (engineRef.current) {
+                engineRef.current.weapons = updated;
+              }
+              return updated;
+            });
+          }
+
+          // Restore completed missions
+          if (cloudProfile.completedMissions?.length) {
+            setMissions((prev) => {
+              return prev.map((m, idx) => {
+                const isCompleted = cloudProfile.completedMissions.includes(m.id);
+                const prevCompleted = idx > 0 ? cloudProfile.completedMissions.includes(prev[idx - 1].id) : true;
+                return {
+                  ...m,
+                  completed: isCompleted,
+                  unlocked: isCompleted || prevCompleted,
+                };
+              });
+            });
+          }
+
+          // Restore solved cases
+          if (cloudProfile.solvedCases?.length) {
+            setCases((prev) =>
+              prev.map((c) => ({
+                ...c,
+                isSolved: cloudProfile.solvedCases.includes(c.id),
+              }))
+            );
+          }
+
+          // Restore customization
+          if (cloudProfile.outfit || cloudProfile.vehicleColor || cloudProfile.sirenType) {
+            setCustomization((prev) => ({
+              ...prev,
+              outfit: (cloudProfile.outfit as any) || prev.outfit,
+              vehicleColor: cloudProfile.vehicleColor || prev.vehicleColor,
+              sirenType: (cloudProfile.sirenType as any) || prev.sirenType,
+            }));
+          }
+
+          setCloudSyncStatus('synced');
+          setLastSavedAt(new Date());
+          addNotification(
+            `Cloud Profile Loaded: Officer Alex Carter (Rank ${cloudProfile.rank})`,
+            'success'
+          );
+        } else {
+          // Create new player profile on Cloud Firestore
+          await createPlayerProfile(
+            user.uid,
+            INITIAL_PLAYER_STATS,
+            INITIAL_WEAPONS,
+            STORY_MISSIONS,
+            CRIME_CASES,
+            { outfit: 'rookie_patrol', vehicleColor: '#ffffff', sirenType: 'classic' }
+          );
+          setCloudSyncStatus('synced');
+          setLastSavedAt(new Date());
+          addNotification('New Officer Profile Created on Cloud Firestore!', 'success');
+        }
+      } catch (err) {
+        console.error('Failed to load player progress from Cloud Firestore:', err);
+        setCloudSyncStatus('offline');
+      } finally {
+        isLoadedRef.current = true;
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Periodic background Cloud sync (every 30 seconds)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (isLoadedRef.current && auth.currentUser) {
+        persistProgressToCloud();
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [persistProgressToCloud]);
+
+  // Google Login / Logout / Manual Save handlers
+  const handleLoginWithGoogle = async () => {
+    try {
+      setCloudSyncStatus('saving');
+      const user = await loginWithGoogle();
+      addNotification(`Signed in with Google as ${user.displayName || user.email}!`, 'success');
+    } catch (err) {
+      console.error('Google Sign-In error:', err);
+      addNotification('Google Sign-In canceled or interrupted.', 'alert');
+      setCloudSyncStatus('synced');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+      setAuthUser(null);
+      setCloudSyncStatus('offline');
+      addNotification('Signed out of Google account. Local profile active.', 'info');
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+  };
+
+  const handleManualSave = async () => {
+    addNotification('Syncing Street Justice progress to Cloud Firestore...', 'info');
+    await persistProgressToCloud();
+    addNotification('Cloud Firestore: Officer Progress Saved Successfully!', 'success');
   };
 
   // Check objective distance to reach
   const checkReachObjectives = (pos: { x: number; y: number; z: number }) => {
-    if (!currentMission) return;
+    if (!currentMission || currentMission.completed) return;
     const reachObj = currentMission.objectives.find(
       (o) => !o.isCompleted && o.targetType === 'reach' && o.targetPos
     );
     if (reachObj && reachObj.targetPos) {
       const dist = Math.hypot(reachObj.targetPos.x - pos.x, reachObj.targetPos.z - pos.z);
-      if (dist < 7.0) {
-        if (currentMissionId === 'ch1_first_patrol' && engineRef.current && !engineRef.current.encounterTriggered) {
-          engineRef.current.triggerAlleywayEncounter();
-        } else {
+      if (dist < 14.0) {
+        if (engineRef.current && authoritativeEncounterManager.canStartMissionEncounter(currentMission.id)) {
+          engineRef.current.triggerMissionEncounter(currentMission);
+        } else if (!reachObj.isCompleted) {
           handleObjectiveProgress('reach', 1);
         }
       }
@@ -168,6 +485,9 @@ export default function App() {
 
         const allCompleted = newObjectives.every((o) => o.isCompleted);
         if (allCompleted && !m.completed) {
+          // Authoritatively mark encounter completed so it never restarts automatically
+          authoritativeEncounterManager.completeEncounter(`mission_enc_${m.id}`);
+
           // Trigger Outro Story Cutscene with Moral Choice!
           setTimeout(() => {
             soundEngine.playRadioChime();
@@ -191,19 +511,19 @@ export default function App() {
     setActiveCutscene(null);
     if (currentMission) {
       setGameStatus('victory');
-      setStats((s) => {
-        const newXP = s.xp + currentMission.rewardXP;
-        const rankInfo = getRankForXP(newXP);
-        return {
-          ...s,
-          xp: newXP,
-          money: s.money + currentMission.rewardMoney,
-          rank: rankInfo.rank,
-          rankName: rankInfo.name,
-          missionsCompleted: s.missionsCompleted + 1,
-          reputation: Math.min(100, s.reputation + 5),
-        };
-      });
+      const newXP = stats.xp + currentMission.rewardXP;
+      const rankInfo = getRankForXP(newXP);
+      const nextStats: PlayerStats = {
+        ...stats,
+        xp: newXP,
+        money: stats.money + currentMission.rewardMoney,
+        rank: rankInfo.rank,
+        rankName: rankInfo.name,
+        missionsCompleted: stats.missionsCompleted + 1,
+        reputation: Math.min(100, stats.reputation + 5),
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
     }
   };
 
@@ -212,20 +532,24 @@ export default function App() {
     if (!currentMission?.choice) return;
     if (choice === 'A') {
       // Option A effect
-      setStats((s) => ({
-        ...s,
-        money: s.money + 1000,
-        reputation: Math.max(0, s.reputation + currentMission.choice!.optionA.reputationBonus),
-        iaViolations: s.iaViolations + 1,
-      }));
+      const nextStats = {
+        ...stats,
+        money: stats.money + 1000,
+        reputation: Math.max(0, stats.reputation + currentMission.choice!.optionA.reputationBonus),
+        iaViolations: stats.iaViolations + 1,
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
       addNotification('Internal Affairs noted questionable conduct (-25 Rep, +$1,000)', 'alert');
     } else {
       // Option B effect
-      setStats((s) => ({
-        ...s,
-        xp: s.xp + 300,
-        reputation: Math.min(100, s.reputation + currentMission.choice!.optionB.reputationBonus),
-      }));
+      const nextStats = {
+        ...stats,
+        xp: stats.xp + 300,
+        reputation: Math.min(100, stats.reputation + currentMission.choice!.optionB.reputationBonus),
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
       addNotification('Commendation for Lawful Integrity (+300 XP, +10 Rep)', 'success');
     }
   };
@@ -234,6 +558,13 @@ export default function App() {
   const handleOrderSurrender = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.orderSuspectsSurrender();
+    }
+  }, []);
+
+  // Police Backup Command
+  const handleCallBackup = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.callPoliceBackup();
     }
   }, []);
 
@@ -259,18 +590,23 @@ export default function App() {
 
   // Confiscate contraband
   const handleConfiscateContraband = (amount: number, itemTitle: string) => {
-    setStats((prev) => ({ ...prev, money: prev.money + amount }));
+    const nextStats = { ...stats, money: stats.money + amount };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
     addNotification(`Confiscated ${itemTitle} +$${amount} street funds!`, 'success');
   };
 
   // Call Police Prisoner Transport
   const handleCallTransport = () => {
-    setStats((prev) => ({
-      ...prev,
-      money: prev.money + 300,
-      xp: prev.xp + 150,
-      reputation: Math.min(100, prev.reputation + 5),
-    }));
+    const nextStats = {
+      ...stats,
+      money: stats.money + 300,
+      xp: stats.xp + 150,
+      arrests: stats.arrests + 1,
+      reputation: Math.min(100, stats.reputation + 5),
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
     addNotification('Squad Prisoner Transport arrived! Suspect booked at Precinct 9 (+ $300 Bounty, +5 Rep)', 'success');
     setTimeout(() => {
       setInterrogationSuspect(null);
@@ -280,7 +616,9 @@ export default function App() {
   // Intel discovered
   const handleIntelDiscovered = (intelText: string) => {
     addNotification(`Intel Uncovered: ${intelText}`, 'info');
-    setStats((prev) => ({ ...prev, xp: prev.xp + 100 }));
+    const nextStats = { ...stats, xp: stats.xp + 100 };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
   };
 
   // Question Witness
@@ -297,8 +635,28 @@ export default function App() {
 
   // Witness statement recorded
   const handleWitnessQuestionCompleted = (statement: string) => {
-    setStats((prev) => ({ ...prev, xp: prev.xp + 75, civiliansRescued: prev.civiliansRescued + 1 }));
+    const nextStats = { ...stats, xp: stats.xp + 75, civiliansRescued: stats.civiliansRescued + 1 };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
     addNotification('Witness statement recorded in police case dossier (+75 XP)', 'success');
+  };
+
+  // Community pillar hospitality support handler
+  const handleCommunitySupport = (type: 'health' | 'armor' | 'reputation' | 'money', amount: number, message: string) => {
+    let nextStats = { ...stats };
+    if (type === 'health') {
+      nextStats.health = Math.min(nextStats.maxHealth, nextStats.health + amount);
+    } else if (type === 'armor') {
+      nextStats.armor = Math.min(nextStats.maxArmor, nextStats.armor + amount);
+    } else if (type === 'reputation') {
+      nextStats.reputation = Math.min(100, nextStats.reputation + amount);
+    } else if (type === 'money') {
+      nextStats.money += amount;
+    }
+    nextStats.xp += 100;
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(message, 'success');
   };
 
   // Take Forensic Camera Photo
@@ -309,10 +667,19 @@ export default function App() {
       setEvidenceList((prev) =>
         prev.map((e) => (e.id === nearbyEv.id ? { ...e, photoTaken: true } : e))
       );
-      setStats((prev) => ({ ...prev, xp: prev.xp + 150, money: prev.money + 100, evidenceFound: prev.evidenceFound + 1 }));
+      const nextStats = {
+        ...stats,
+        xp: stats.xp + 150,
+        money: stats.money + 100,
+        evidenceFound: stats.evidenceFound + 1,
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
       addNotification(`Forensic Photograph Logged: ${nearbyEv.title}! (+150 XP, +$100)`, 'success');
     } else {
-      setStats((prev) => ({ ...prev, xp: prev.xp + 50 }));
+      const nextStats = { ...stats, xp: stats.xp + 50 };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
       addNotification('Crime Scene Surveillance Photo Logged (+50 XP)', 'info');
     }
   };
@@ -322,37 +689,46 @@ export default function App() {
     const c = cases.find((item) => item.id === caseId);
     if (!c || c.isSolved) return;
 
-    setCases((prev) => prev.map((item) => (item.id === caseId ? { ...item, isSolved: true } : item)));
-    setStats((prev) => {
-      const newXP = prev.xp + c.rewardXP;
-      const rankInfo = getRankForXP(newXP);
-      return {
-        ...prev,
-        xp: newXP,
-        money: prev.money + c.rewardMoney,
-        rank: rankInfo.rank,
-        rankName: rankInfo.name,
-        reputation: Math.min(100, prev.reputation + 20),
-      };
-    });
+    const nextCases = cases.map((item) => (item.id === caseId ? { ...item, isSolved: true } : item));
+    setCases(nextCases);
+    const newXP = stats.xp + c.rewardXP;
+    const rankInfo = getRankForXP(newXP);
+    const nextStats = {
+      ...stats,
+      xp: newXP,
+      money: stats.money + c.rewardMoney,
+      rank: rankInfo.rank,
+      rankName: rankInfo.name,
+      reputation: Math.min(100, stats.reputation + 20),
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats, undefined, undefined, nextCases);
     addNotification(`CASE SOLVED: ${c.title}! Grand Jury Indictments Issued (+ $${c.rewardMoney}, +20 Rep)!`, 'success');
   };
 
-  // Dynamic 911 Events Periodic Dispatch
+  // Listen for new natural 911 incidents from the City Incident Manager
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (!activeDynamicEvent && !briefingOpen && !isMenuOpen && !isMainMenuOpen) {
-        const ev = generateRandomCityEvent();
+    cityIncidentManager.onNewIncident = (ev: DynamicEvent) => {
+      // Only display alert banner if player is in normal gameplay and not already on an active scene
+      if (!activeDynamicEvent && !activeIncidentObjective && !briefingOpen && !isMenuOpen && !isMainMenuOpen) {
         setActiveDynamicEvent(ev);
         soundEngine.playRadioChime();
       }
-    }, 75000); // Trigger dynamic 911 calls periodically
+    };
 
-    return () => clearInterval(interval);
-  }, [activeDynamicEvent, briefingOpen, isMenuOpen, isMainMenuOpen]);
+    return () => {
+      cityIncidentManager.onNewIncident = undefined;
+    };
+  }, [activeDynamicEvent, activeIncidentObjective, briefingOpen, isMenuOpen, isMainMenuOpen]);
+
+  // Dismiss Dynamic Event
+  const handleDismissDynamicEvent = useCallback(() => {
+    setActiveDynamicEvent(null);
+  }, []);
 
   // Respond to Dynamic Event
   const handleRespondDynamicEvent = (event: DynamicEvent) => {
+    setActiveIncidentObjective(event);
     if (engineRef.current) {
       engineRef.current.waypointPos.set(event.position.x, 0, event.position.z);
       engineRef.current.waypointBeaconGroup.position.copy(engineRef.current.waypointPos);
@@ -363,12 +739,40 @@ export default function App() {
     setActiveDynamicEvent(null);
   };
 
-  // Initialize Game Engine
+  // Stabilize callbacks and UI flags in refs to prevent GameEngine re-instantiation on modal toggles
+  const isCameraOpenRef = useRef(isCameraOpen);
+  isCameraOpenRef.current = isCameraOpen;
+  const isCasesOpenRef = useRef(isCasesOpen);
+  isCasesOpenRef.current = isCasesOpen;
+  const interrogationSuspectRef = useRef(interrogationSuspect);
+  interrogationSuspectRef.current = interrogationSuspect;
+  const activeCivilianRef = useRef(activeCivilian);
+  activeCivilianRef.current = activeCivilian;
+  const handleToggleFlashlightRef = useRef(handleToggleFlashlight);
+  handleToggleFlashlightRef.current = handleToggleFlashlight;
+  const handleOrderSurrenderRef = useRef(handleOrderSurrender);
+  handleOrderSurrenderRef.current = handleOrderSurrender;
+  const handleCallBackupRef = useRef(handleCallBackup);
+  handleCallBackupRef.current = handleCallBackup;
+
+  // Initialize Game Engine (Once on mount)
   useEffect(() => {
     if (!containerRef.current) return;
 
     const engine = new GameEngine(containerRef.current, stats, weapons);
     engineRef.current = engine;
+    const initialMission = missions.find((m) => m.id === currentMissionId) || missions[0];
+    if (initialMission) {
+      engine.setMission(initialMission);
+    }
+
+    // Ensure safe dimensions on initial layout pass
+    requestAnimationFrame(() => {
+      engine.handleResize();
+    });
+    const resizeTimeout = setTimeout(() => {
+      engine.handleResize();
+    }, 120);
 
     // Connect callbacks
     engine.onStatsChanged = (newStats) => {
@@ -389,6 +793,10 @@ export default function App() {
 
     engine.onMissionObjectiveProgress = (type, amount) => {
       handleObjectiveProgress(type, amount);
+    };
+
+    engine.onIncidentResolved = (_inc) => {
+      setActiveIncidentObjective(null);
     };
 
     // Main animation & input sync loop
@@ -421,10 +829,11 @@ export default function App() {
             setCurrentVehicle(undefined);
           }
 
-          // Sync enemies, police NPCs & civilians for radar
+          // Sync enemies, police NPCs, military soldiers & civilians for radar
           setEnemies([...engineRef.current.ai.enemies]);
           setCivilians([...engineRef.current.ai.civilians]);
           setPoliceNPCs([...engineRef.current.ai.policeNPCs]);
+          setMilitarySoldiers([...engineRef.current.ai.militarySoldiers]);
         }
       }
       animId = requestAnimationFrame(loop);
@@ -450,9 +859,10 @@ export default function App() {
       if (k === 'q') inputState.current.switchWeapon = true;
 
       // Special Police Controls
-      if (k === 'f') handleToggleFlashlight();
+      if (k === 'f') handleToggleFlashlightRef.current();
       if (k === 'v') setIsCameraOpen((prev) => !prev);
-      if (k === 'g') handleOrderSurrender();
+      if (k === 'g') handleOrderSurrenderRef.current();
+      if (k === 'b') handleCallBackupRef.current();
 
       if (k === 'e') {
         // Smart Contextual Interaction:
@@ -485,13 +895,13 @@ export default function App() {
       }
 
       if (k === 'escape') {
-        if (isCameraOpen) {
+        if (isCameraOpenRef.current) {
           setIsCameraOpen(false);
-        } else if (isCasesOpen) {
+        } else if (isCasesOpenRef.current) {
           setIsCasesOpen(false);
-        } else if (interrogationSuspect) {
+        } else if (interrogationSuspectRef.current) {
           setInterrogationSuspect(null);
-        } else if (activeCivilian) {
+        } else if (activeCivilianRef.current) {
           setActiveCivilian(null);
         } else {
           setIsMenuOpen((prev) => !prev);
@@ -536,6 +946,7 @@ export default function App() {
     window.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
+      clearTimeout(resizeTimeout);
       cancelAnimationFrame(animId);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
@@ -545,7 +956,7 @@ export default function App() {
       window.removeEventListener('contextmenu', handleContextMenu);
       engine.destroy();
     };
-  }, [handleToggleFlashlight, handleOrderSurrender, isCameraOpen, isCasesOpen, interrogationSuspect, activeCivilian]);
+  }, []);
 
   // Contextual check flags for touch controls
   const canEnterVehicle =
@@ -564,7 +975,9 @@ export default function App() {
     engineRef.current &&
     engineRef.current.ai.enemies.some(
       (e) =>
-        e.state === 'surrendered' &&
+        e.state !== 'arrested' &&
+        e.state !== 'dead' &&
+        (e.state === 'surrendered' || e.health < e.maxHealth * 0.45) &&
         engineRef.current!.playerPos.distanceTo({
           x: e.position.x,
           y: 0,
@@ -604,21 +1017,27 @@ export default function App() {
 
     if (!w.unlocked) {
       if (stats.money >= w.price) {
-        setStats((prev) => ({ ...prev, money: prev.money - w.price }));
+        const nextStats = { ...stats, money: stats.money - w.price };
+        setStats(nextStats);
         w.unlocked = true;
-        setWeapons([...engineRef.current.weapons]);
+        const nextWeapons = [...engineRef.current.weapons];
+        setWeapons(nextWeapons);
         addNotification(`Requisitioned ${w.name}!`, 'success');
         engineRef.current.switchWeaponById(w.id);
+        persistProgressToCloud(nextStats, nextWeapons);
       }
     } else {
       const upgradeCost = w.upgradeLevel * 400;
       if (stats.money >= upgradeCost) {
-        setStats((prev) => ({ ...prev, money: prev.money - upgradeCost }));
+        const nextStats = { ...stats, money: stats.money - upgradeCost };
+        setStats(nextStats);
         w.upgradeLevel++;
         w.damage = Math.round(w.damage * 1.25);
         w.fireRate = parseFloat((w.fireRate * 1.1).toFixed(1));
-        setWeapons([...engineRef.current.weapons]);
+        const nextWeapons = [...engineRef.current.weapons];
+        setWeapons(nextWeapons);
         addNotification(`Upgraded ${w.name} to Mark ${w.upgradeLevel}!`, 'success');
+        persistProgressToCloud(nextStats, nextWeapons);
       }
     }
   };
@@ -628,21 +1047,25 @@ export default function App() {
     if (!engineRef.current) return;
 
     if (type === 'armor' && stats.money >= 250) {
-      setStats((prev) => ({
-        ...prev,
-        money: prev.money - 250,
-        armor: Math.min(prev.maxArmor, prev.armor + 50),
-      }));
+      const nextStats = {
+        ...stats,
+        money: stats.money - 250,
+        armor: Math.min(stats.maxArmor, stats.armor + 50),
+      };
+      setStats(nextStats);
       engineRef.current.stats.armor = Math.min(stats.maxArmor, stats.armor + 50);
       addNotification('Kevlar Armor Reinforced +50', 'success');
+      persistProgressToCloud(nextStats);
     } else if (type === 'health' && stats.money >= 150) {
-      setStats((prev) => ({
-        ...prev,
-        money: prev.money - 150,
-        health: prev.maxHealth,
-      }));
+      const nextStats = {
+        ...stats,
+        money: stats.money - 150,
+        health: stats.maxHealth,
+      };
+      setStats(nextStats);
       engineRef.current.stats.health = stats.maxHealth;
       addNotification('Field Trauma Medkit Applied · Health Restored', 'success');
+      persistProgressToCloud(nextStats);
     }
   };
 
@@ -651,15 +1074,9 @@ export default function App() {
     setCurrentMissionId(missionId);
     const m = missions.find((item) => item.id === missionId);
     if (m && engineRef.current) {
-      engineRef.current.spawnMissionEnemies();
-      const reachObj = m.objectives.find((o) => o.targetPos);
-      if (reachObj && reachObj.targetPos) {
-        engineRef.current.waypointPos.set(reachObj.targetPos.x, 0, reachObj.targetPos.z);
-        engineRef.current.waypointBeaconGroup.position.copy(engineRef.current.waypointPos);
-        engineRef.current.isWaypointActive = true;
-      }
+      engineRef.current.setMission(m);
       setBriefingOpen(true);
-      addNotification(`Briefing: ${m.title}`, 'info');
+      addNotification(`Dispatch Assignment: ${m.title}`, 'info');
     }
   };
 
@@ -679,10 +1096,16 @@ export default function App() {
       engineRef.current.stats = { ...INITIAL_PLAYER_STATS };
       engineRef.current.playerPos.copy(engineRef.current.cityData.spawnPoints.player);
       engineRef.current.playerRig.root.position.copy(engineRef.current.playerPos);
-      engineRef.current.spawnMissionEnemies();
+      engineRef.current.playerYaw = Math.PI;
+      engineRef.current.cameraPitch = 0.15;
+      engineRef.current.playerRig.root.rotation.y = Math.PI;
+      engineRef.current.initCameraPosition();
+      authoritativeEncounterManager.reset();
+      engineRef.current.setMission(STORY_MISSIONS[0]);
     }
     setIsMainMenuOpen(false);
     setBriefingOpen(true);
+    persistProgressToCloud(INITIAL_PLAYER_STATS, INITIAL_WEAPONS, STORY_MISSIONS);
     addNotification('New Career Started: Officer Carter assigned to Precinct 9.', 'success');
   };
 
@@ -693,25 +1116,39 @@ export default function App() {
       engineRef.current.stats.armor = 50;
       engineRef.current.playerPos.copy(engineRef.current.cityData.spawnPoints.player);
       engineRef.current.playerRig.root.position.copy(engineRef.current.playerPos);
-      engineRef.current.spawnMissionEnemies();
+      engineRef.current.playerYaw = Math.PI;
+      engineRef.current.cameraPitch = 0.15;
+      engineRef.current.playerRig.root.rotation.y = Math.PI;
+      engineRef.current.initCameraPosition();
+      if (currentMission) {
+        engineRef.current.setMission(currentMission);
+      }
       setStats({ ...engineRef.current.stats });
       setGameStatus(null);
       addNotification('Officer Carter dispatched from Precinct 9.', 'info');
     }
   };
 
-  // Next Mission after victory
+  // Next Mission after victory - Endless Next Gameplay Loop
   const handleContinueAfterVictory = () => {
     setGameStatus(null);
     const currentIdx = missions.findIndex((m) => m.id === currentMissionId);
     if (currentIdx < missions.length - 1) {
       const nextMission = missions[currentIdx + 1];
-      setMissions((prev) =>
-        prev.map((m) => (m.id === nextMission.id ? { ...m, unlocked: true } : m))
+      const updatedMissions = missions.map((m) =>
+        m.id === nextMission.id ? { ...m, unlocked: true } : m
       );
+      setMissions(updatedMissions);
       handleSelectMission(nextMission.id);
+      persistProgressToCloud(undefined, undefined, updatedMissions);
     } else {
-      addNotification('All City Syndicates Dismantled! Free Roam unlocked.', 'success');
+      // Endless Loop: generate new random police mission
+      const randMission = generateRandomPoliceMission(stats.rank);
+      const updatedMissions = [...missions, randMission];
+      setMissions(updatedMissions);
+      handleSelectMission(randMission.id);
+      persistProgressToCloud(undefined, undefined, updatedMissions);
+      addNotification(`911 Priority Dispatch: ${randMission.title}!`, 'alert');
     }
   };
 
@@ -736,6 +1173,17 @@ export default function App() {
     engineRef.current?.setTimeOfDay(time);
   };
 
+  const handleCycleTimeOfDay = () => {
+    const cycle: Record<TimeOfDay, TimeOfDay> = {
+      day: 'sunset',
+      sunset: 'night',
+      night: 'day',
+    };
+    const next = cycle[timeOfDay] || 'day';
+    handleChangeTimeOfDay(next);
+    addNotification(`Environment: ${next.toUpperCase()} patrol active`, 'info');
+  };
+
   // Weather
   const handleChangeWeather = (w: WeatherType) => {
     setWeather(w);
@@ -749,7 +1197,7 @@ export default function App() {
       {/* 3D WebGL Canvas Container */}
       <div
         ref={containerRef}
-        className="absolute inset-0 cursor-crosshair"
+        className="absolute inset-0 w-full h-full cursor-crosshair overflow-hidden"
         onClick={() => {
           soundEngine.startAmbientCity();
           soundEngine.toggleSiren(false);
@@ -764,12 +1212,15 @@ export default function App() {
         stats={stats}
         currentWeapon={activeWeapon}
         currentMission={currentMission}
+        activeIncidentObjective={activeIncidentObjective}
         currentVehicle={currentVehicle}
         playerPos={playerPos}
         playerYaw={playerYaw}
         enemies={enemies}
         civilians={civilians}
         policeNPCs={policeNPCs}
+        militarySoldiers={militarySoldiers}
+        vehicles={engineRef.current ? engineRef.current.vehicles.map((v) => v.entity) : []}
         notifications={notifications}
         isAiming={isAiming}
         isReloading={isReloading}
@@ -781,6 +1232,10 @@ export default function App() {
         isFlashlightOn={isFlashlightOn}
         onToggleFlashlight={handleToggleFlashlight}
         onToggleCamera={() => setIsCameraOpen((prev) => !prev)}
+        cloudSyncStatus={cloudSyncStatus}
+        onToggleFullscreen={handleToggleFullscreen}
+        timeOfDay={timeOfDay}
+        onToggleTimeOfDay={handleCycleTimeOfDay}
       />
 
       {/* MOBILE TOUCH CONTROLS */}
@@ -798,13 +1253,14 @@ export default function App() {
         onQuestionCivilian={handleQuestionCivilian}
         onToggleCamera={() => setIsCameraOpen((prev) => !prev)}
         onToggleFlashlight={handleToggleFlashlight}
+        onCallBackup={handleCallBackup}
       />
 
       {/* DYNAMIC 911 CALL BANNER */}
       <DynamicEventBanner
         event={activeDynamicEvent}
         onRespond={handleRespondDynamicEvent}
-        onDismiss={() => setActiveDynamicEvent(null)}
+        onDismiss={handleDismissDynamicEvent}
       />
 
       {/* FORENSIC CAMERA OVERLAY */}
@@ -832,6 +1288,7 @@ export default function App() {
         isOpen={!!activeCivilian}
         onClose={() => setActiveCivilian(null)}
         onQuestionCompleted={handleWitnessQuestionCompleted}
+        onCommunitySupport={handleCommunitySupport}
       />
 
       {/* CASE FILES & INVESTIGATION DOSSIER */}
@@ -883,6 +1340,13 @@ export default function App() {
         cases={cases}
         evidenceList={evidenceList}
         onSolveCase={handleSolveCase}
+        authUser={authUser}
+        cloudSyncStatus={cloudSyncStatus}
+        lastSavedAt={lastSavedAt}
+        onLoginWithGoogle={handleLoginWithGoogle}
+        onLogout={handleLogout}
+        onManualSave={handleManualSave}
+        onRespondIncident={handleRespondDynamicEvent}
       />
 
       {/* MAIN MENU */}
@@ -916,6 +1380,12 @@ export default function App() {
         onChangeWeather={handleChangeWeather}
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
+        authUser={authUser}
+        cloudSyncStatus={cloudSyncStatus}
+        lastSavedAt={lastSavedAt}
+        onLoginWithGoogle={handleLoginWithGoogle}
+        onLogout={handleLogout}
+        onManualSave={handleManualSave}
       />
 
       {/* VICTORY & DEFEAT MODAL */}
@@ -926,6 +1396,27 @@ export default function App() {
         onRestart={handleRestart}
         onContinue={handleContinueAfterVictory}
       />
+
+      {/* MOBILE LANDSCAPE ORIENTATION ADVISORY PROMPT */}
+      {isPortrait && (
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center select-none font-['Inter',sans-serif]">
+          <div className="w-16 h-16 rounded-2xl bg-blue-600/20 border border-blue-500/50 flex items-center justify-center text-blue-400 mb-4 animate-bounce">
+            <RotateCw className="w-8 h-8" />
+          </div>
+          <h2 className="font-['Chakra_Petch'] font-bold text-xl text-slate-100 uppercase tracking-wide">
+            Rotate Device to Landscape
+          </h2>
+          <p className="text-xs text-slate-400 max-w-xs mt-2 leading-relaxed">
+            Street Justice is designed for full-screen landscape mobile gaming. Please turn your phone sideways to play.
+          </p>
+          <button
+            onClick={handleToggleFullscreen}
+            className="mt-6 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-['Chakra_Petch'] font-bold text-xs uppercase tracking-wider rounded-xl shadow-[0_0_20px_rgba(59,130,246,0.5)] active:scale-95 transition-all"
+          >
+            Enter Fullscreen Landscape
+          </button>
+        </div>
+      )}
     </div>
   );
 }

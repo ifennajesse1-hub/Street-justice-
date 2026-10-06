@@ -1,0 +1,117 @@
+{
+  "entities": {
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Secure player progress, stats, unlocked arsenal, and mission achievements for Street Justice.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the authenticated player."
+        },
+        "money": {
+          "type": "number",
+          "description": "Current player cash rewards earned from patrols and missions."
+        },
+        "xp": {
+          "type": "number",
+          "description": "Total experience points gained."
+        },
+        "rank": {
+          "type": "number",
+          "description": "Current police officer rank number (1-8)."
+        },
+        "rankName": {
+          "type": "string",
+          "description": "Title of current rank (e.g. Rookie Officer, Detective, Sergeant)."
+        },
+        "reputation": {
+          "type": "number",
+          "description": "Internal Affairs integrity reputation standing (0-100)."
+        },
+        "kills": {
+          "type": "number",
+          "description": "Total hostile syndicate combatants neutralized."
+        },
+        "arrests": {
+          "type": "number",
+          "description": "Total criminal suspects subdued and handcuffed."
+        },
+        "missionsCompleted": {
+          "type": "number",
+          "description": "Number of department assignments completed."
+        },
+        "civiliansRescued": {
+          "type": "number",
+          "description": "Number of civilians protected and questioned."
+        },
+        "evidenceFound": {
+          "type": "number",
+          "description": "Forensic evidence clues photographed or logged."
+        },
+        "iaViolations": {
+          "type": "number",
+          "description": "Excessive force violations recorded by IA."
+        },
+        "unlockedWeapons": {
+          "type": "array",
+          "description": "List of unlocked weapon IDs in the armory."
+        },
+        "weaponUpgradeLevels": {
+          "type": "object",
+          "description": "Map of weapon ID to current upgrade Mark tier."
+        },
+        "completedMissions": {
+          "type": "array",
+          "description": "List of completed mission IDs."
+        },
+        "solvedCases": {
+          "type": "array",
+          "description": "List of solved investigation case IDs."
+        },
+        "outfit": {
+          "type": "string",
+          "description": "Selected officer duty uniform."
+        },
+        "vehicleColor": {
+          "type": "string",
+          "description": "Selected cruiser color hex."
+        },
+        "sirenType": {
+          "type": "string",
+          "description": "Cruiser siren sound type."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the player profile was initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the most recent cloud sync save."
+        }
+      },
+      "required": [
+        "userId",
+        "money",
+        "xp",
+        "rank",
+        "rankName",
+        "reputation",
+        "unlockedWeapons",
+        "completedMissions",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/players/{playerId}": {
+      "schema": {
+        "$ref": "#/entities/PlayerProfile"
+      },
+      "description": "Player progress save documents partitioned by authenticated user ID."
+    }
+  }
+}

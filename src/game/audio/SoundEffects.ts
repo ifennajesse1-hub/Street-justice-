@@ -247,6 +247,69 @@ class SoundEngine {
     punchOsc.stop(t + 0.12);
   }
 
+  // Dry-fire metallic hammer click (when magazine is empty)
+  public playDryFire() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(2200, t);
+    osc.frequency.exponentialRampToValueAtTime(800, t + 0.04);
+    gain.gain.setValueAtTime(0.25, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.04);
+  }
+
+  // Police radio backup dispatch call with radio squelch & tones
+  public playRadioDispatchCall() {
+    if (this.isMuted) return;
+    this.initContext();
+    if (!this.ctx) return;
+
+    const t = this.ctx.currentTime;
+    // Dual DTMF-style dispatch tones
+    [850, 1150].forEach((freq) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.18, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.18);
+    });
+
+    // Radio squelch burst at end
+    try {
+      const bufferSize = Math.floor(this.ctx.sampleRate * 0.12);
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.12;
+      }
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.15, t + 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+      noise.connect(gain);
+      gain.connect(this.ctx.destination);
+      noise.start(t + 0.18);
+      noise.stop(t + 0.30);
+    } catch {}
+  }
+
   // Reload click
   public playReload() {
     if (this.isMuted) return;

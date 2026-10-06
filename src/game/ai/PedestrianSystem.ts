@@ -118,12 +118,39 @@ export const PEDESTRIAN_ROUTES: Record<string, PedestrianRoute> = {
       { x: -29, z: -22, action: 'none' },
     ],
   },
+  cedar_heights_loop: {
+    id: 'cedar_heights_loop',
+    name: 'Cedar Heights Community Promenade',
+    isLoop: true,
+    waypoints: [
+      { x: -62, z: -22, action: 'none' }, // Marcus's Auto Repair
+      { x: -62, z: -8, action: 'none' },
+      { x: -62, z: 5, action: 'shop_window', waitDuration: 4 }, // Mama Leah's Kitchen
+      { x: -62, z: 20, action: 'shop_window', waitDuration: 3 }, // Crown Barbershop
+      { x: -75, z: 12, action: 'none' }, // Towards Community Court
+      { x: -75, z: -10, action: 'none' },
+      { x: -62, z: -35, action: 'shop_window', waitDuration: 3 }, // Kingston Vinyl
+    ],
+  },
+  cedar_heights_court: {
+    id: 'cedar_heights_court',
+    name: 'Community Center & Basketball Court',
+    isLoop: true,
+    waypoints: [
+      { x: -74, z: -4, action: 'none' },
+      { x: -78, z: 2, action: 'check_phone', waitDuration: 4 },
+      { x: -74, z: 8, action: 'none' },
+      { x: -70, z: 0, action: 'none' },
+    ],
+  },
 };
 
 export interface PedestrianInitialConfig {
   name: string;
   archetype: CivilianArchetype;
-  accessory: 'phone' | 'briefcase' | 'coffee' | 'shopping_bag' | 'none';
+  accessory: 'phone' | 'briefcase' | 'coffee' | 'shopping_bag' | 'wrench' | 'groceries' | 'none';
+  communityDistrict?: 'cedar_heights' | 'downtown' | 'civic_center' | 'industrial';
+  businessName?: string;
   spawnPos: { x: number; y: number; z: number };
   routeId: string;
   speed: number;
@@ -132,6 +159,135 @@ export interface PedestrianInitialConfig {
 }
 
 export const PEDESTRIAN_CONFIGS: PedestrianInitialConfig[] = [
+  // 0. Cedar Heights Predominantly Black Fictional Community (Shop Owners, Mechanics, Elders, Youth)
+  {
+    name: 'Marcus Washington',
+    archetype: 'mechanic',
+    accessory: 'wrench',
+    communityDistrict: 'cedar_heights',
+    businessName: "Marcus's Precision Auto Repair",
+    spawnPos: { x: -60, y: 0.2, z: -20 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.1,
+    courage: 0.70,
+    dialogue: "Afternoon, Officer Carter! Just tuning up a customer's '68 Coupe. Keep an eye on those Cobalt Skulls near the docks—they tried sizing up our garage yesterday, but we look out for our own here.",
+  },
+  {
+    name: 'Mama Leah Jenkins',
+    archetype: 'shopkeeper',
+    accessory: 'groceries',
+    communityDistrict: 'cedar_heights',
+    businessName: "Mama Leah's Soul Kitchen",
+    spawnPos: { x: -60, y: 0.2, z: 6 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.05,
+    courage: 0.65,
+    dialogue: "Good to see your badge in the Heights, Officer! I've got warm peach cobbler and skillet cornbread inside. You keep our neighborhood safe from those reckless gang shootouts, you hear?",
+  },
+  {
+    name: 'Andre Robinson',
+    archetype: 'shopkeeper',
+    accessory: 'coffee',
+    communityDistrict: 'cedar_heights',
+    businessName: 'Crown Heritage Barbershop',
+    spawnPos: { x: -60, y: 0.2, z: 22 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.2,
+    courage: 0.60,
+    dialogue: "What's good, Officer Carter! The barbershop talk today is about the Neon Pythons tagging the alleyway. We don't tolerate turf wars on our avenue. Appreciate you walking the beat.",
+  },
+  {
+    name: 'Grandma Bernice Jackson',
+    archetype: 'elder',
+    accessory: 'none',
+    communityDistrict: 'cedar_heights',
+    spawnPos: { x: -64, y: 0.2, z: -5 },
+    routeId: 'cedar_heights_loop',
+    speed: 0.85,
+    courage: 0.80,
+    dialogue: "Lord bless you, young officer. I've lived on this block 42 years. We raised good kids, teachers, and mechanics here. Don't let these outside crews disturb our peace.",
+  },
+  {
+    name: 'Nia Thorne',
+    archetype: 'student',
+    accessory: 'phone',
+    communityDistrict: 'cedar_heights',
+    businessName: 'Cedar Community Youth Center',
+    spawnPos: { x: -72, y: 0.2, z: 4 },
+    routeId: 'cedar_heights_court',
+    speed: 1.35,
+    courage: 0.55,
+    dialogue: "Hey Officer Carter! We're hosting a 3-on-3 youth tournament at the court this weekend. If you see kids hanging around corners, steer 'em over here instead of the gang recruiters.",
+  },
+  {
+    name: 'Malik Davis',
+    archetype: 'commuter',
+    accessory: 'groceries',
+    communityDistrict: 'cedar_heights',
+    spawnPos: { x: -63, y: 0.2, z: -32 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.3,
+    courage: 0.50,
+    dialogue: "Heading back from Heights Corner Market with fresh greens. Watch out for those Iron Vipers up north by the train tracks—they're heavily armed and looking for a fight.",
+  },
+  {
+    name: 'DeAndre Cole',
+    archetype: 'jogger',
+    accessory: 'none',
+    communityDistrict: 'cedar_heights',
+    spawnPos: { x: -76, y: 0.2, z: -2 },
+    routeId: 'cedar_heights_court',
+    speed: 2.7,
+    courage: 0.60,
+    dialogue: "Getting my cardio in before practice! Thanks for keeping the avenue clear of reckless street racers, Officer.",
+  },
+  {
+    name: 'Coach Jamal Henderson',
+    archetype: 'shopkeeper',
+    accessory: 'coffee',
+    communityDistrict: 'cedar_heights',
+    businessName: 'Cedar Community Youth Athletics',
+    spawnPos: { x: -74, y: 0.2, z: 6 },
+    routeId: 'cedar_heights_court',
+    speed: 1.25,
+    courage: 0.75,
+    dialogue: "Officer Carter! We're teaching the kids discipline and teamwork on this court. Keep our perimeter safe from those gang enforcers trying to recruit.",
+  },
+  {
+    name: 'Maya & Little Leo',
+    archetype: 'shopper',
+    accessory: 'shopping_bag',
+    communityDistrict: 'cedar_heights',
+    spawnPos: { x: -62, y: 0.2, z: -12 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.0,
+    courage: 0.45,
+    dialogue: "Say hello to Officer Carter, Leo! We love our Cedar Heights neighborhood. It feels good knowing our community has honest officers watching out for families.",
+  },
+  {
+    name: 'Tariq Washington',
+    archetype: 'mechanic',
+    accessory: 'wrench',
+    communityDistrict: 'cedar_heights',
+    businessName: "Marcus's Precision Auto Repair",
+    spawnPos: { x: -58, y: 0.2, z: -24 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.35,
+    courage: 0.65,
+    dialogue: "Uncle Marcus is teaching me how to tune classic V8 engines. Some Cobalt Skulls tried asking us to install illegal police scanners yesterday—we threw them out immediately!",
+  },
+  {
+    name: 'Elijah Brooks',
+    archetype: 'shopkeeper',
+    accessory: 'groceries',
+    communityDistrict: 'cedar_heights',
+    businessName: 'Cedar Community Hardware',
+    spawnPos: { x: -65, y: 0.2, z: 14 },
+    routeId: 'cedar_heights_loop',
+    speed: 1.1,
+    courage: 0.70,
+    dialogue: "Officer Carter, good to see you! If any neighbors need locks or security lights reinforced against gang vandalism, I supply 'em at cost. We stand together here.",
+  },
   // 1. Business Executives & Commuters in Corporate District
   {
     name: 'Sophia Bennett',

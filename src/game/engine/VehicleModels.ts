@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+import { GangFactionId } from '../../types/game';
+
 export interface VehicleRig {
   root: THREE.Group;
   wheels: THREE.Mesh[];
@@ -9,38 +11,52 @@ export interface VehicleRig {
   blueSirenLight?: THREE.Mesh;
   headlights?: THREE.Mesh[];
   type: 'police' | 'criminal' | 'civilian' | 'armored';
+  faction?: GangFactionId | 'aegis_taskforce';
 }
 
 /**
  * Builds smooth, aerodynamic modern low-poly 3D vehicles with realistic proportions,
- * sculpted chassis, curved wheel arches, realistic alloy wheels, and animated lighting.
+ * sculpted chassis, curved wheel arches, realistic alloy wheels, faction insignia, and animated lighting.
  */
 export function createVehicleMesh(
   type: 'police' | 'criminal' | 'civilian' | 'armored',
-  customColor?: string
+  customColor?: string,
+  faction?: GangFactionId | 'aegis_taskforce'
 ): VehicleRig {
   const root = new THREE.Group();
   const wheels: THREE.Mesh[] = [];
 
-  // Vehicle Dimensions (realistic sedan / interceptor proportions)
-  const isArmored = type === 'armored';
+  // Vehicle Dimensions (realistic sedan / interceptor / APC proportions)
+  const isArmored = type === 'armored' || faction === 'aegis_taskforce' || faction === 'iron_vipers';
   const carWidth = isArmored ? 2.4 : 1.95;
   const carLength = isArmored ? 5.2 : 4.6;
   const carHeight = isArmored ? 1.7 : 1.25;
 
-  // Color Palette
+  // Color Palette tailored to faction identity
   let primaryColor = 0xffffff;
   let secondaryColor = 0x0f172a;
 
   if (type === 'police') {
     primaryColor = 0xf8fafc; // Clean pursuit white
     secondaryColor = 0x0f172a; // Deep midnight navy police doors/roof
+  } else if (faction === 'cobalt_skulls') {
+    primaryColor = 0x1e40af; // Deep Cobalt Blue muscle car
+    secondaryColor = 0xf8fafc; // White racing stripes
+  } else if (faction === 'neon_pythons') {
+    primaryColor = 0x84cc16; // Acid Neon Lime Green street tuner
+    secondaryColor = 0x18181b; // Matte black aerodynamic carbon hood/roof
+  } else if (faction === 'iron_vipers') {
+    primaryColor = 0x991b1b; // Dark Crimson armored heavy cruiser
+    secondaryColor = 0x18181b; // Reinforced steel armor trim
+  } else if (faction === 'eclipse_syndicate') {
+    primaryColor = 0x09090b; // Stealth Matte Black high-tech operative van
+    secondaryColor = 0x3b0764; // Dark stealth violet trim
+  } else if (faction === 'aegis_taskforce' || type === 'armored') {
+    primaryColor = 0xb49a79; // Desert Tan Tactical Military Plating
+    secondaryColor = 0x574f45; // Olive Drab / Steel reinforcements
   } else if (type === 'criminal') {
     primaryColor = 0x18181b; // Matte raven black muscle
     secondaryColor = 0xdc2626; // Crimson racing accents
-  } else if (type === 'armored') {
-    primaryColor = 0x1e293b; // Tactical slate SWAT
-    secondaryColor = 0x0f172a;
   } else {
     // Civilian modern cars
     const civColors = [0x2563eb, 0xd97706, 0x16a34a, 0x9333ea, 0x475569, 0x0284c7, 0xe11d48, 0x64748b];
@@ -254,6 +270,77 @@ export function createVehicleMesh(
     const centerPod = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.16), matChrome);
     centerPod.position.set(0, 1.20, -0.18);
     chassisGroup.add(centerPod);
+  } else if (faction === 'aegis_taskforce' || type === 'armored') {
+    // Aegis Military Tactical APC Roof Hatch & Comms Gear
+    const hatchGeom = new THREE.CylinderGeometry(0.38, 0.42, 0.12, 12);
+    const hatch = new THREE.Mesh(hatchGeom, matDarkTrim);
+    hatch.position.set(0, 1.42, -0.2);
+    chassisGroup.add(hatch);
+
+    // High-Intensity Tactical Roof Searchlight
+    const lightGeom = new THREE.CylinderGeometry(0.14, 0.16, 0.24, 10);
+    lightGeom.rotateX(Math.PI / 2);
+    const roofSearchlight = new THREE.Mesh(lightGeom, matDarkTrim);
+    roofSearchlight.position.set(-0.45, 1.50, 0.4);
+    chassisGroup.add(roofSearchlight);
+
+    const lensGeom = new THREE.CircleGeometry(0.13, 10);
+    const lens = new THREE.Mesh(lensGeom, new THREE.MeshBasicMaterial({ color: 0xfef08a }));
+    lens.position.set(-0.45, 1.50, 0.53);
+    chassisGroup.add(lens);
+
+    // Tactical Whip Comms Antenna
+    const antennaGeom = new THREE.CylinderGeometry(0.012, 0.02, 1.35, 6);
+    const antenna = new THREE.Mesh(antennaGeom, matDarkTrim);
+    antenna.position.set(carWidth * 0.38, 1.95, -carLength * 0.32);
+    antenna.rotation.z = -0.08;
+    chassisGroup.add(antenna);
+  } else if (faction === 'neon_pythons') {
+    // Neon Pythons Vibrant Underglow Neon
+    const underglowGeom = new THREE.PlaneGeometry(carWidth * 0.85, carLength * 0.75);
+    const underglowMat = new THREE.MeshBasicMaterial({
+      color: 0x84cc16,
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide,
+    });
+    const underglow = new THREE.Mesh(underglowGeom, underglowMat);
+    underglow.rotateX(Math.PI / 2);
+    underglow.position.set(0, 0.12, 0);
+    chassisGroup.add(underglow);
+  } else if (faction === 'cobalt_skulls') {
+    // Dual White Racing Stripes on Cobalt Muscle Car
+    [-0.22, 0.22].forEach((sx) => {
+      const stripeGeom = new THREE.BoxGeometry(0.12, 0.02, carLength * 0.88);
+      const stripe = new THREE.Mesh(stripeGeom, new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 }));
+      stripe.position.set(sx, 0.75, 0);
+      chassisGroup.add(stripe);
+    });
+  } else if (faction === 'eclipse_syndicate') {
+    // Eclipse Syndicate High-Tech Stealth Operative Van Roof Radar & Scanner Bar
+    const sensorDomeGeom = new THREE.SphereGeometry(0.28, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5);
+    const sensorDome = new THREE.Mesh(sensorDomeGeom, matDarkTrim);
+    sensorDome.position.set(0, 1.45, 0);
+    chassisGroup.add(sensorDome);
+
+    const purpleGlow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.18, 0.04, 12),
+      new THREE.MeshBasicMaterial({ color: 0xa855f7 })
+    );
+    purpleGlow.position.set(0, 1.46, 0);
+    chassisGroup.add(purpleGlow);
+
+    // Front crimson LED cyber scanner
+    const scannerGeom = new THREE.BoxGeometry(carWidth * 0.5, 0.04, 0.06);
+    const scanner = new THREE.Mesh(scannerGeom, new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+    scanner.position.set(0, 0.52, carLength * 0.48);
+    chassisGroup.add(scanner);
+  } else if (faction === 'iron_vipers') {
+    // Heavy Steel Grid Grille Protector
+    const viperGrilleGeom = new THREE.BoxGeometry(carWidth * 0.75, 0.4, 0.06);
+    const viperGrille = new THREE.Mesh(viperGrilleGeom, matDarkTrim);
+    viperGrille.position.set(0, 0.5, carLength * 0.52);
+    chassisGroup.add(viperGrille);
   }
 
   root.add(chassisGroup);

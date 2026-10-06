@@ -94,6 +94,21 @@ export const INITIAL_PLAYER_STATS: PlayerStats = {
   arrests: 0,
   missionsCompleted: 0,
   reputation: 85, // 0 to 100 (Internal Affairs standing)
+  integrity: 80, // 0 to 100: Moral Integrity (80 = By-the-Book Officer)
+  bankSavings: 1200, // Starting insured bank balance in Metro Corporate Bank
+  valuables: [
+    {
+      id: 'val_starting_watch',
+      name: 'Engraved Silver Pocket Watch',
+      category: 'watch',
+      description: 'Heirloom pocket watch passed down from your grandfather, a legendary Precinct 9 Captain.',
+      estimatedValue: 350,
+      isStolenOrEvidence: false,
+      sourceLocation: 'Personal Family Heirloom',
+    },
+  ],
+  vaultValuables: [],
+  backupCooldown: 0,
   iaViolations: 0,
   civiliansRescued: 0,
   evidenceFound: 0,

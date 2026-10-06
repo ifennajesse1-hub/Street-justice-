@@ -22,12 +22,19 @@ export interface WeaponConfig {
   isNonLethal?: boolean;
 }
 
-export type EnemyType = 'thug' | 'enforcer' | 'boss';
+export type GangFactionId = 'cobalt_skulls' | 'neon_pythons' | 'iron_vipers' | 'eclipse_syndicate';
+export type SpecialFactionId = 'police' | 'aegis_taskforce' | GangFactionId;
+
+export type EnemyType = 'thug' | 'enforcer' | 'boss' | 'military_soldier' | 'syndicate_operative';
+
+export type PoliceRole = 'patrol' | 'pursuit' | 'swat' | 'traffic' | 'fire_responder' | 'fire';
 
 export interface EnemyEntity {
   id: string;
   type: EnemyType;
   name: string;
+  faction?: GangFactionId | 'aegis_taskforce';
+  factionName?: string;
   position: { x: number; y: number; z: number };
   rotation: number;
   health: number;
@@ -35,6 +42,7 @@ export interface EnemyEntity {
   state: 'idle' | 'patrol' | 'chase' | 'cover' | 'shoot' | 'flee' | 'surrendered' | 'arrested' | 'dead';
   weapon: WeaponConfig;
   target?: { x: number; y: number; z: number };
+  targetEnemyId?: string;
   coverPosition?: { x: number; y: number; z: number };
   shootCooldown: number;
   alertLevel: number; // 0 to 100
@@ -49,12 +57,25 @@ export interface EnemyEntity {
   };
 }
 
-export type CivilianArchetype = 'commuter' | 'shopper' | 'jogger' | 'tourist' | 'business' | 'skittish';
+export type CivilianArchetype =
+  | 'commuter'
+  | 'shopper'
+  | 'jogger'
+  | 'tourist'
+  | 'business'
+  | 'skittish'
+  | 'mechanic'
+  | 'shopkeeper'
+  | 'elder'
+  | 'student';
 
 export interface CivilianEntity {
   id: string;
   name?: string;
   archetype?: CivilianArchetype;
+  communityDistrict?: 'cedar_heights' | 'downtown' | 'civic_center' | 'industrial';
+  businessName?: string;
+  role?: string;
   position: { x: number; y: number; z: number };
   targetPos: { x: number; y: number; z: number };
   rotation?: number;
@@ -62,7 +83,7 @@ export interface CivilianEntity {
   speed: number;
   meshIndex: number;
   dialogue?: string;
-  accessory?: 'phone' | 'briefcase' | 'coffee' | 'shopping_bag' | 'none';
+  accessory?: 'phone' | 'briefcase' | 'coffee' | 'shopping_bag' | 'wrench' | 'groceries' | 'none';
   courage?: number; // 0 to 1: determines whether they flee immediately or continue walking normally
   idleTimer?: number;
   panicTimer?: number;
@@ -72,20 +93,40 @@ export interface CivilianEntity {
   shoutCooldown?: number;
 }
 
-export interface PoliceNPCEntity {
+export interface MilitaryNPCEntity {
   id: string;
   name: string;
-  badgeNumber: string;
+  callsign: string;
   position: { x: number; y: number; z: number };
   rotation: number;
   health: number;
   maxHealth: number;
-  state: 'patrolling' | 'responding' | 'engaging' | 'arresting';
+  state: 'patrolling' | 'suppressing' | 'advancing' | 'breaching';
+  weapon: WeaponConfig;
+  shootCooldown: number;
+  meshIndex: number;
+  squadLeader?: boolean;
+  targetPos?: { x: number; y: number; z: number };
+}
+
+export interface PoliceNPCEntity {
+  id: string;
+  name: string;
+  badgeNumber: string;
+  role?: PoliceRole;
+  position: { x: number; y: number; z: number };
+  rotation: number;
+  health: number;
+  maxHealth: number;
+  state: 'patrolling' | 'responding' | 'engaging' | 'arresting' | 'perimeter' | 'evacuating';
   weapon: WeaponConfig;
   shootCooldown: number;
   meshIndex: number;
   targetPos?: { x: number; y: number; z: number };
   targetEnemyId?: string;
+  assignedIncidentId?: string;
+  isBackupUnit?: boolean;
+  squadOffset?: { x: number; z: number };
 }
 
 export interface VehicleEntity {
@@ -120,7 +161,19 @@ export interface EvidenceItem {
 export interface DynamicEvent {
   id: string;
   title: string;
-  type: 'robbery' | 'car_theft' | 'brawl' | 'pursuit' | 'hostage' | 'disturbance';
+  type:
+    | 'robbery'
+    | 'car_theft'
+    | 'brawl'
+    | 'pursuit'
+    | 'hostage'
+    | 'disturbance'
+    | 'fire'
+    | 'prison_break'
+    | 'accident'
+    | 'disaster_crash'
+    | 'gang_war'
+    | 'civilian_emergency';
   description: string;
   locationName: string;
   position: { x: number; y: number; z: number };
@@ -128,6 +181,17 @@ export interface DynamicEvent {
   rewardXP: number;
   active: boolean;
   timeRemaining: number;
+  severity?: 'minor' | 'moderate' | 'high' | 'critical' | 'disaster';
+  stage?: 'reported' | 'dispatching' | 'active' | 'escalating' | 'resolving' | 'resolved' | 'suspect_escaped';
+  assignedUnits?: ('patrol' | 'pursuit' | 'swat' | 'fire' | 'traffic')[];
+  requiresUnits?: number;
+  policeProgress?: number;
+  visualEffect?: 'fire' | 'smoke' | 'debris' | 'barricade' | 'none';
+  status?: 'pending' | 'active' | 'resolved' | 'failed' | 'cooldown' | 'completed' | 'inactive';
+  spawnedEnemyIds?: string[];
+  spawnedPoliceIds?: string[];
+  spawnedCivilianIds?: string[];
+  cooldownTimer?: number;
 }
 
 export interface MissionObjective {

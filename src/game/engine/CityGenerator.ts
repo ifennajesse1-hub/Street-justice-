@@ -11,6 +11,7 @@ export interface CollisionBox {
 
 export interface CityBuildResult {
   sceneGroup: THREE.Group;
+  skyMesh: THREE.Mesh;
   collisionBoxes: CollisionBox[];
   spawnPoints: {
     player: THREE.Vector3;
@@ -20,6 +21,8 @@ export interface CityBuildResult {
     bank: THREE.Vector3;
     policeStation: THREE.Vector3;
     harbor: THREE.Vector3;
+    cedarHeights: THREE.Vector3;
+    militaryCheckpoint: THREE.Vector3;
     enemies: THREE.Vector3[];
     civilians: THREE.Vector3[];
   };
@@ -132,13 +135,12 @@ export function generateCityDistrict(): CityBuildResult {
   // ----------------------------------------------------
   // 0. SKY DOME & DISTANT METROPOLIS SKYLINE
   // ----------------------------------------------------
-  // Atmospheric Sky Dome with horizon gradient
-  const skyRadius = 290;
-  const skyGeom = new THREE.SphereGeometry(skyRadius, 32, 24, 0, Math.PI * 2, 0, Math.PI / 2);
-  skyGeom.scale(-1, 1, 1); // Invert normals so it renders from inside
+  // Full atmospheric sky dome encompassing the metropolis district
+  const skyGeom = new THREE.SphereGeometry(340, 32, 20);
   const skyMat = new THREE.MeshBasicMaterial({
-    color: 0x1e3a8a, // Twilight atmospheric sky
+    color: 0x60a5fa, // Clean daytime metropolis sky
     side: THREE.BackSide,
+    depthWrite: false,
   });
   const skyDome = new THREE.Mesh(skyGeom, skyMat);
   sceneGroup.add(skyDome);
@@ -796,6 +798,523 @@ export function generateCityDistrict(): CityBuildResult {
   sceneGroup.add(commercialGroup);
 
   // ----------------------------------------------------
+  // 7B. CEDAR HEIGHTS URBAN COMMUNITY & FACTION TERRITORIES
+  // Predominantly Black fictional neighborhood with local businesses,
+  // community basketball court, Marcus's Auto Repair, Mama Leah's Diner,
+  // Crown Barbershop, Kingston Vinyl, and gang territory markers.
+  // ----------------------------------------------------
+  const cedarHeightsGroup = new THREE.Group();
+
+  // Sidewalk foundation block for Cedar Heights promenade (X: -78 to -52, Z: -50 to +40)
+  createSidewalkBlock(-65, -5, 30, 92);
+
+  // 1. Marcus's Precision Auto Repair (X: -65, Z: -22)
+  const garageGeom = new THREE.BoxGeometry(22, 9.5, 18);
+  const garageMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8, metalness: 0.3 });
+  const garageBuilding = new THREE.Mesh(garageGeom, garageMat);
+  garageBuilding.position.set(-66, 4.75, -22);
+  garageBuilding.castShadow = true;
+  garageBuilding.receiveShadow = true;
+  cedarHeightsGroup.add(garageBuilding);
+  addCollision(-66, -22, 22, 18, 9.5);
+
+  // Garage Roll-Up Bay Doors
+  [-4.5, 4.5].forEach((gx) => {
+    const gDoor = new THREE.Mesh(new THREE.BoxGeometry(6.4, 5.0, 0.2), metalGalvanized);
+    gDoor.position.set(-66 + gx, 2.5, -12.9);
+    cedarHeightsGroup.add(gDoor);
+
+    const hazardHeader = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.4, 0.3), roadLineYellow);
+    hazardHeader.position.set(-66 + gx, 5.2, -12.9);
+    cedarHeightsGroup.add(hazardHeader);
+  });
+
+  // Neon Marquee: "MARCUS AUTO REPAIR"
+  const marcusSign = new THREE.Mesh(
+    new THREE.BoxGeometry(16, 1.8, 0.35),
+    new THREE.MeshStandardMaterial({ color: 0x0284c7, emissive: 0x0369a1, emissiveIntensity: 0.9 })
+  );
+  marcusSign.position.set(-66, 7.5, -12.8);
+  cedarHeightsGroup.add(marcusSign);
+
+  // Outdoor Hydraulic Car Lift with safety posts
+  const liftGroup = new THREE.Group();
+  liftGroup.position.set(-57, 0, -22);
+  [-2.2, 2.2].forEach((lx) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4.2, 0.4), metalDarkMat);
+    post.position.set(lx, 2.1, 0);
+    liftGroup.add(post);
+  });
+  // Lift cross arms
+  const liftArmGeom = new THREE.BoxGeometry(4.8, 0.18, 1.6);
+  const liftArms = new THREE.Mesh(liftArmGeom, roadLineYellow);
+  liftArms.position.set(0, 1.4, 0);
+  liftGroup.add(liftArms);
+
+  // Classic project coupe raised on hydraulic lift
+  const classicCarMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.35, metalness: 0.7 });
+  const classicCarBody = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, 3.8), classicCarMat);
+  classicCarBody.position.set(0, 1.85, 0);
+  classicCarBody.castShadow = true;
+  liftGroup.add(classicCarBody);
+  cedarHeightsGroup.add(liftGroup);
+  addCollision(-57, -22, 4.8, 2.2, 3.0, 'prop');
+
+  // Red Mechanics Tool Chest & Stack of Tires
+  const toolChestMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4, metalness: 0.8 });
+  const toolChest = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.5, 0.7), toolChestMat);
+  toolChest.position.set(-59.5, 0.95, -14.5);
+  toolChest.castShadow = true;
+  cedarHeightsGroup.add(toolChest);
+  addCollision(-59.5, -14.5, 1.4, 0.7, 1.5, 'prop');
+
+  const tireMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.95 });
+  for (let t = 0; t < 3; t++) {
+    const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.28, 12), tireMat);
+    tire.position.set(-58.2, 0.36 + t * 0.28, -14.5);
+    tire.castShadow = true;
+    cedarHeightsGroup.add(tire);
+  }
+
+  // 2. Mama Leah's Soul Kitchen & Diner (X: -65, Z: 6)
+  const dinerGeom = new THREE.BoxGeometry(18, 9.0, 18);
+  const dinerBuilding = new THREE.Mesh(dinerGeom, brickMat);
+  dinerBuilding.position.set(-66, 4.5, 6);
+  dinerBuilding.castShadow = true;
+  dinerBuilding.receiveShadow = true;
+  cedarHeightsGroup.add(dinerBuilding);
+  addCollision(-66, 6, 18, 18, 9.0);
+
+  // Warm Plate Glass Display Window
+  const dinerWindow = new THREE.Mesh(new THREE.BoxGeometry(12, 3.6, 0.25), warmWindowMat);
+  dinerWindow.position.set(-66, 2.4, 15.1);
+  cedarHeightsGroup.add(dinerWindow);
+
+  // Red & White Striped Fabric Awning
+  const dinerAwningMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.8 });
+  const dinerAwning = new THREE.Mesh(new THREE.BoxGeometry(13.5, 0.2, 2.8), dinerAwningMat);
+  dinerAwning.position.set(-66, 4.5, 16.2);
+  dinerAwning.rotation.x = -0.15;
+  cedarHeightsGroup.add(dinerAwning);
+
+  // Glowing Marquee Sign: "MAMA LEAH'S SOUL KITCHEN"
+  const leahSign = new THREE.Mesh(
+    new THREE.BoxGeometry(14, 1.6, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xd97706, emissiveIntensity: 0.95 })
+  );
+  leahSign.position.set(-66, 6.4, 15.2);
+  cedarHeightsGroup.add(leahSign);
+
+  // Outdoor dining patio tables with chairs
+  [-3.5, 3.5].forEach((tx) => {
+    const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 0.08, 12), warmWindowMat);
+    tableTop.position.set(-66 + tx, 0.85, 18.2);
+    const tableLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.75, 8), metalDarkMat);
+    tableLeg.position.set(-66 + tx, 0.45, 18.2);
+    cedarHeightsGroup.add(tableTop);
+    cedarHeightsGroup.add(tableLeg);
+    addCollision(-66 + tx, 18.2, 1.4, 1.4, 0.9, 'prop');
+  });
+
+  // 3. Crown Heritage Barbershop (X: -65, Z: 24)
+  const barberGeom = new THREE.BoxGeometry(16, 9.0, 16);
+  const barberBuilding = new THREE.Mesh(barberGeom, concreteFacadeMat);
+  barberBuilding.position.set(-66, 4.5, 24);
+  barberBuilding.castShadow = true;
+  barberBuilding.receiveShadow = true;
+  cedarHeightsGroup.add(barberBuilding);
+  addCollision(-66, 24, 16, 16, 9.0);
+
+  // Glass storefront
+  const barberWin = new THREE.Mesh(new THREE.BoxGeometry(10, 3.6, 0.25), illuminatedGlassMat);
+  barberWin.position.set(-66, 2.4, 15.9);
+  cedarHeightsGroup.add(barberWin);
+
+  // Sign: "CROWN BARBERSHOP"
+  const barberSign = new THREE.Mesh(
+    new THREE.BoxGeometry(12, 1.4, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.85 })
+  );
+  barberSign.position.set(-66, 5.8, 15.9);
+  cedarHeightsGroup.add(barberSign);
+
+  // Iconic Spinning Barber Pole Cylinder
+  const poleGroup = new THREE.Group();
+  poleGroup.position.set(-59.8, 2.4, 16.5);
+  const poleBase = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.15, 12), metalGalvanized);
+  const poleTop = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.15, 12), metalGalvanized);
+  poleBase.position.y = -0.7;
+  poleTop.position.y = 0.7;
+  const poleCylinder = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.14, 0.14, 1.25, 14),
+    new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.3 })
+  );
+  poleGroup.add(poleBase);
+  poleGroup.add(poleTop);
+  poleGroup.add(poleCylinder);
+  cedarHeightsGroup.add(poleGroup);
+  addCollision(-59.8, 16.5, 0.5, 0.5, 2.0, 'prop');
+
+  // 4. Kingston Vinyl Records & Audio (X: -65, Z: -36)
+  const recordGeom = new THREE.BoxGeometry(18, 8.5, 12);
+  const recordBuilding = new THREE.Mesh(recordGeom, concreteFacadeMat);
+  recordBuilding.position.set(-66, 4.25, -36);
+  recordBuilding.castShadow = true;
+  recordBuilding.receiveShadow = true;
+  cedarHeightsGroup.add(recordBuilding);
+  addCollision(-66, -36, 18, 12, 8.5);
+
+  const vinylSign = new THREE.Mesh(
+    new THREE.BoxGeometry(12, 1.4, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0xa855f7, emissive: 0x7e22ce, emissiveIntensity: 0.9 })
+  );
+  vinylSign.position.set(-66, 6.2, -29.8);
+  cedarHeightsGroup.add(vinylSign);
+
+  // 5. Community Basketball Half-Court & Youth Center (X: -78, Z: 2)
+  const courtGroup = new THREE.Group();
+  courtGroup.position.set(-78, 0.22, 2);
+
+  // Blacktop court surface (18m x 14m)
+  const courtSurface = new THREE.Mesh(
+    new THREE.PlaneGeometry(16, 14),
+    new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 })
+  );
+  courtSurface.rotateX(-Math.PI / 2);
+  courtSurface.position.y = 0.02;
+  courtGroup.add(courtSurface);
+
+  // Key Paint & Arc lines
+  const keySurface = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.2, 5.8),
+    new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.8 })
+  );
+  keySurface.rotateX(-Math.PI / 2);
+  keySurface.position.set(0, 0.025, 3.8);
+  courtGroup.add(keySurface);
+
+  // Basketball Hoop Post & Backboard
+  const hoopPost = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4.2, 10), metalDarkMat);
+  hoopPost.position.set(0, 2.1, 6.8);
+  courtGroup.add(hoopPost);
+
+  const backboard = new THREE.Mesh(
+    new THREE.BoxGeometry(2.0, 1.2, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 })
+  );
+  backboard.position.set(0, 3.2, 6.2);
+  courtGroup.add(backboard);
+
+  const orangeRim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.32, 0.03, 8, 16),
+    new THREE.MeshStandardMaterial({ color: 0xf97316, metalness: 0.7, roughness: 0.3 })
+  );
+  orangeRim.rotateX(Math.PI / 2);
+  orangeRim.position.set(0, 2.9, 5.85);
+  courtGroup.add(orangeRim);
+
+  // Chainlink Fence Border
+  const fenceMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.7, roughness: 0.4, wireframe: true });
+  const backFence = new THREE.Mesh(new THREE.PlaneGeometry(16, 3.5), fenceMat);
+  backFence.position.set(0, 1.75, 7.0);
+  courtGroup.add(backFence);
+  addCollision(-78, 9, 16, 0.4, 3.5, 'fence');
+
+  cedarHeightsGroup.add(courtGroup);
+
+  // 5B. Cedar Heights Grand Welcoming Archway across Cedar Avenue entrance (X: -50, Z: 0)
+  const archGroup = new THREE.Group();
+  archGroup.position.set(-50, 0, 0);
+
+  // Brick stone pillars on both sides of Cedar Avenue
+  const archPillarMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.65, metalness: 0.2 });
+  const goldTrimMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.8, roughness: 0.25 });
+  const emeraldMat = new THREE.MeshStandardMaterial({ color: 0x059669, emissive: 0x047857, emissiveIntensity: 0.8 });
+
+  [-5.8, 5.8].forEach((pz) => {
+    // Pillar base
+    const pBase = new THREE.Mesh(new THREE.BoxGeometry(1.6, 6.5, 1.6), archPillarMat);
+    pBase.position.set(0, 3.25, pz);
+    pBase.castShadow = true;
+    archGroup.add(pBase);
+
+    // Gold decorative crown
+    const pCap = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 1.8), goldTrimMat);
+    pCap.position.set(0, 6.6, pz);
+    archGroup.add(pCap);
+
+    // Warm lantern light
+    const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), neonGoldMat);
+    lantern.position.set(0, 6.0, pz > 0 ? pz - 0.9 : pz + 0.9);
+    archGroup.add(lantern);
+
+    addCollision(-50, pz, 1.6, 1.6, 6.5, 'barrier');
+  });
+
+  // Curved overhead crossbeam spanning Cedar Avenue
+  const crossBeam = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.5, 12.8), archPillarMat);
+  crossBeam.position.set(0, 7.2, 0);
+  archGroup.add(crossBeam);
+
+  // Illuminated Marquee Banner: "WELCOME TO CEDAR HEIGHTS · COMMUNITY & HERITAGE"
+  const archBanner = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 1.1, 10.5),
+    emeraldMat
+  );
+  archBanner.position.set(0.4, 7.2, 0);
+  archGroup.add(archBanner);
+
+  // Flower planter boxes with vibrant blooms outside Mama Leah's Diner and Crown Barbershop
+  const planterMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.85 });
+  const plantMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.6 });
+  const flowerMat = new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.5 });
+
+  [-10, 0, 10, 20].forEach((pz) => {
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 2.4), planterMat);
+    box.position.set(-56.5, 0.3, pz);
+    archGroup.add(box);
+
+    const foliage = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45), plantMat);
+    foliage.position.set(-56.5, 0.75, pz);
+    archGroup.add(foliage);
+
+    const flower = new THREE.Mesh(new THREE.SphereGeometry(0.14, 6, 6), flowerMat);
+    flower.position.set(-56.5, 0.95, pz);
+    archGroup.add(flower);
+  });
+
+  // Fresh market produce fruit stand outside Mama Leah's Diner (crates of apples and greens)
+  const standGroup = new THREE.Group();
+  standGroup.position.set(-57.2, 0, 9);
+  const standTable = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.9, 2.8), planterMat);
+  standTable.position.y = 0.45;
+  standGroup.add(standTable);
+
+  const produceAwning = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.1, 3.0), roadLineYellow);
+  produceAwning.position.set(0, 1.8, 0);
+  produceAwning.rotation.x = 0.12;
+  standGroup.add(produceAwning);
+  archGroup.add(standGroup);
+
+  // Basketball on the court
+  const basketballMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.85 });
+  const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 12), basketballMat);
+  ballMesh.position.set(-77.2, 0.24, 3.4);
+  archGroup.add(ballMesh);
+
+  cedarHeightsGroup.add(archGroup);
+
+  // 6. Gang Territory Stencil Tags & Murals
+  // Cobalt Skulls Docks Turf Tag (on East Warehouse wall)
+  const cobaltTagGeom = new THREE.PlaneGeometry(6.4, 2.8);
+  const cobaltTagMat = new THREE.MeshBasicMaterial({
+    color: 0x2563eb,
+    transparent: true,
+    opacity: 0.88,
+    side: THREE.DoubleSide,
+  });
+  const cobaltTag = new THREE.Mesh(cobaltTagGeom, cobaltTagMat);
+  cobaltTag.position.set(whX - 18.1, 5.2, whZ - 6);
+  cobaltTag.rotateY(Math.PI / 2);
+  cedarHeightsGroup.add(cobaltTag);
+
+  // Neon Pythons Midtown Tag (on Alley West Wall)
+  const pythonTagMat = new THREE.MeshBasicMaterial({
+    color: 0x84cc16,
+    transparent: true,
+    opacity: 0.9,
+    side: THREE.DoubleSide,
+  });
+  const pythonTag = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 2.2), pythonTagMat);
+  pythonTag.position.set(-31.7, 4.2, -18);
+  pythonTag.rotateY(Math.PI / 2);
+  cedarHeightsGroup.add(pythonTag);
+
+  // Iron Vipers North Wall Tag
+  const viperTagMat = new THREE.MeshBasicMaterial({
+    color: 0xdc2626,
+    transparent: true,
+    opacity: 0.88,
+    side: THREE.DoubleSide,
+  });
+  const viperTag = new THREE.Mesh(new THREE.PlaneGeometry(5.8, 2.4), viperTagMat);
+  viperTag.position.set(0, 3.8, -48);
+  cedarHeightsGroup.add(viperTag);
+
+  // 7. Aegis Defense Taskforce Armored Checkpoint (Tactical Sandbags & Barriers)
+  const sandbagMat = new THREE.MeshStandardMaterial({ color: 0xca8a04, roughness: 0.95 });
+  const checkpointPositions = [
+    { x: 18, z: 16 },
+    { x: 21, z: 16 },
+    { x: 24, z: 16 },
+  ];
+  checkpointPositions.forEach((cp) => {
+    const sb = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.9, 1.1), sandbagMat);
+    sb.position.set(cp.x, 0.45, cp.z);
+    sb.castShadow = true;
+    cedarHeightsGroup.add(sb);
+    addCollision(cp.x, cp.z, 2.6, 1.1, 0.9, 'barrier');
+  });
+
+  // Aegis Tactical Checkpoint Warning Signboard & Amber Flasher
+  const aegisSignGroup = new THREE.Group();
+  aegisSignGroup.position.set(21, 0, 18.5);
+  const aegisPost = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.2, 8), metalDarkMat);
+  aegisPost.position.y = 1.1;
+  aegisSignGroup.add(aegisPost);
+
+  const aegisBoard = new THREE.Mesh(
+    new THREE.BoxGeometry(2.4, 1.2, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.6 })
+  );
+  aegisBoard.position.y = 1.8;
+  aegisSignGroup.add(aegisBoard);
+
+  const amberBeacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xf59e0b })
+  );
+  amberBeacon.position.y = 2.48;
+  aegisSignGroup.add(amberBeacon);
+  cedarHeightsGroup.add(aegisSignGroup);
+
+  // 7B. Metro Bank Eclipse Syndicate Vault Breach props
+  const syndicateBreachGroup = new THREE.Group();
+  syndicateBreachGroup.position.set(28, 0, -24);
+  const hackedTerminal = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 1.6, 0.8),
+    new THREE.MeshStandardMaterial({ color: 0x09090b, roughness: 0.4, metalness: 0.9 })
+  );
+  hackedTerminal.position.y = 0.8;
+  syndicateBreachGroup.add(hackedTerminal);
+
+  const purpleDisplay = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.6, 0.5),
+    new THREE.MeshBasicMaterial({ color: 0xa855f7 })
+  );
+  purpleDisplay.position.set(0, 1.1, 0.41);
+  syndicateBreachGroup.add(purpleDisplay);
+  cedarHeightsGroup.add(syndicateBreachGroup);
+
+  sceneGroup.add(cedarHeightsGroup);
+
+  // ----------------------------------------------------
+  // 7C. EAST AVENUE METROPOLIS PROMENADE & COMMERCIAL BUILDINGS (Quadrant: +X, Z: -40 to +40)
+  // Completes the city skyline along East Avenue with hotels, tech emporium, corner deli,
+  // storefront awnings, illuminated windows and pedestrian sidewalks.
+  // ----------------------------------------------------
+  const eastsideGroup = new THREE.Group();
+
+  // East Avenue Sidewalk Promenade Slab (X: 11 to 35, Z: -50 to +50)
+  createSidewalkBlock(23, 0, 24, 98);
+
+  // 1. The Metropolis Grand Hotel & Plaza (X: 24, Z: 24)
+  const hotelGeom = new THREE.BoxGeometry(20, 24, 22);
+  const hotelMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45, metalness: 0.35 });
+  const hotelMesh = new THREE.Mesh(hotelGeom, hotelMat);
+  hotelMesh.position.set(24, 12, 24);
+  hotelMesh.castShadow = true;
+  hotelMesh.receiveShadow = true;
+  eastsideGroup.add(hotelMesh);
+  addCollision(24, 24, 20, 22, 24);
+
+  // Grand Hotel Ribbon Windows
+  for (let fl = 1; fl <= 5; fl++) {
+    const winGeom = new THREE.BoxGeometry(0.25, 2.2, 16);
+    const winMesh = new THREE.Mesh(winGeom, fl % 2 === 0 ? illuminatedGlassMat : warmWindowMat);
+    winMesh.position.set(13.9, fl * 4.0 + 1.5, 24);
+    eastsideGroup.add(winMesh);
+  }
+
+  // Grand Hotel Entrance Portico & Pillars
+  [-5.5, 5.5].forEach((pz) => {
+    const pillarGeom = new THREE.BoxGeometry(1.2, 5.2, 1.2);
+    const pillar = new THREE.Mesh(pillarGeom, concreteFacadeMat);
+    pillar.position.set(12.6, 2.6, 24 + pz);
+    pillar.castShadow = true;
+    eastsideGroup.add(pillar);
+    addCollision(12.6, 24 + pz, 1.2, 1.2, 5.2, 'prop');
+  });
+
+  // Hotel Valet Canopy
+  const hotelCanopy = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.3, 14), metalDarkMat);
+  hotelCanopy.position.set(12.0, 5.2, 24);
+  eastsideGroup.add(hotelCanopy);
+
+  // Hotel Gold Neon Marquee
+  const hotelSign = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 1.6, 12),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xd97706, emissiveIntensity: 0.9 })
+  );
+  hotelSign.position.set(13.7, 6.4, 24);
+  eastsideGroup.add(hotelSign);
+
+  // 2. Eastside Deli, Bodega & Newsstand (X: 22, Z: 2)
+  const deliGeom = new THREE.BoxGeometry(16, 8.5, 16);
+  const deliMesh = new THREE.Mesh(deliGeom, brickMat);
+  deliMesh.position.set(23, 4.25, 2);
+  deliMesh.castShadow = true;
+  deliMesh.receiveShadow = true;
+  eastsideGroup.add(deliMesh);
+  addCollision(23, 2, 16, 16, 8.5);
+
+  // Deli Front Window & Display
+  const deliWin = new THREE.Mesh(new THREE.BoxGeometry(0.25, 3.4, 11), warmWindowMat);
+  deliWin.position.set(14.9, 2.1, 2);
+  eastsideGroup.add(deliWin);
+
+  // Striped Deli Awning
+  const deliAwningMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.75 });
+  const deliAwning = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.22, 12), deliAwningMat);
+  deliAwning.position.set(13.6, 4.2, 2);
+  deliAwning.rotation.z = 0.15;
+  eastsideGroup.add(deliAwning);
+
+  // Deli Sign
+  const deliSign = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 1.4, 10),
+    new THREE.MeshStandardMaterial({ color: 0xfef08a, emissive: 0xb45309, emissiveIntensity: 0.85 })
+  );
+  deliSign.position.set(14.8, 5.8, 2);
+  eastsideGroup.add(deliSign);
+
+  // Sidewalk Vending Machine outside Deli
+  const vendMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4, metalness: 0.8 });
+  const vendMachine = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 1.0), vendMat);
+  vendMachine.position.set(13.2, 1.1, 7.5);
+  vendMachine.castShadow = true;
+  eastsideGroup.add(vendMachine);
+  addCollision(13.2, 7.5, 1.2, 1.0, 2.2, 'prop');
+
+  // 3. Apex Technology & Media Tower (X: 24, Z: -22)
+  const techGeom = new THREE.BoxGeometry(18, 20, 20);
+  const techMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.8 });
+  const techMesh = new THREE.Mesh(techGeom, techMat);
+  techMesh.position.set(24, 10, -22);
+  techMesh.castShadow = true;
+  techMesh.receiveShadow = true;
+  eastsideGroup.add(techMesh);
+  addCollision(24, -22, 18, 20, 20);
+
+  // Tech Tower Vertical Cyan LED Light Bars
+  for (let b = -6; b <= 6; b += 3) {
+    const barGeom = new THREE.BoxGeometry(0.15, 14, 0.25);
+    const barMesh = new THREE.Mesh(barGeom, neonBlueMat);
+    barMesh.position.set(14.9, 10, -22 + b);
+    eastsideGroup.add(barMesh);
+  }
+
+  // Apex Sign
+  const techSign = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 1.8, 12),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.9 })
+  );
+  techSign.position.set(14.8, 18.2, -22);
+  eastsideGroup.add(techSign);
+
+  sceneGroup.add(eastsideGroup);
+
+  // ----------------------------------------------------
   // 8. MODERN STREET FURNITURE & LIGHTING
   // Sleek curved LED streetlights, traffic signals, transit shelters & hydrants
   // ----------------------------------------------------
@@ -1000,15 +1519,18 @@ export function generateCityDistrict(): CityBuildResult {
 
   return {
     sceneGroup,
+    skyMesh: skyDome,
     collisionBoxes,
     spawnPoints: {
-      player: new THREE.Vector3(-28, 0.20, 30), // Standing elevated on Precinct 9 sidewalk
-      policeVehicle: new THREE.Vector3(-24, 0, 26), // Parked at precinct curb
+      player: new THREE.Vector3(-14, 0.20, 24), // Standing on Main Avenue West sidewalk with clear view down avenue
+      policeVehicle: new THREE.Vector3(-10, 0, 18), // Parked at precinct avenue curb
       criminalVehicle: new THREE.Vector3(25, 0, 35), // Parked outside warehouse
       warehouse: new THREE.Vector3(whX, 0, whZ),
       bank: new THREE.Vector3(bankX, 0, bankZ),
       policeStation: new THREE.Vector3(policeX, 0, policeZ),
       harbor: new THREE.Vector3(whX + 20, 0, whZ + 20),
+      cedarHeights: new THREE.Vector3(-60, 0.20, 0),
+      militaryCheckpoint: new THREE.Vector3(20, 0.20, 16),
       enemies: [
         new THREE.Vector3(38, 0, 30),
         new THREE.Vector3(45, 0, 35),
@@ -1028,4 +1550,21 @@ export function generateCityDistrict(): CityBuildResult {
       ],
     },
   };
+}
+
+/**
+ * Returns accurate ground surface height at (x, z):
+ * - 0.22m on raised sidewalks, storefront walkways, and pedestrian plazas
+ * - 0.00m on road network corridors and zebra crossings
+ */
+export function getGroundElevation(x: number, z: number): number {
+  // Main Avenue (Z-axis corridor) and Cross Boulevard (X-axis corridor)
+  if (Math.abs(x) < 9.2 || Math.abs(z) < 9.2) {
+    return 0.0;
+  }
+  // Urban district sidewalks, commercial promenade, and Cedar Heights
+  if (Math.abs(x) <= 125 && Math.abs(z) <= 125) {
+    return 0.22;
+  }
+  return 0.0;
 }

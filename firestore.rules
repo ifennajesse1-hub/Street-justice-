@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all (Pillar 1: Global Safety Net)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidPlayerProfile(data) {
+      return data.keys().hasAll([
+        'userId', 'money', 'xp', 'rank', 'rankName', 'reputation',
+        'unlockedWeapons', 'completedMissions', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'userId', 'money', 'xp', 'rank', 'rankName', 'reputation',
+        'kills', 'arrests', 'missionsCompleted', 'civiliansRescued',
+        'evidenceFound', 'iaViolations', 'unlockedWeapons', 'weaponUpgradeLevels',
+        'completedMissions', 'solvedCases', 'outfit', 'vehicleColor',
+        'sirenType', 'createdAt', 'updatedAt'
+      ])
+      && data.userId is string && data.userId.size() <= 128
+      && data.money is number && data.money >= 0
+      && data.xp is number && data.xp >= 0
+      && data.rank is number && data.rank >= 1 && data.rank <= 20
+      && data.rankName is string && data.rankName.size() <= 64
+      && data.reputation is number && data.reputation >= 0 && data.reputation <= 100
+      && (!('kills' in data) || (data.kills is number && data.kills >= 0))
+      && (!('arrests' in data) || (data.arrests is number && data.arrests >= 0))
+      && (!('missionsCompleted' in data) || (data.missionsCompleted is number && data.missionsCompleted >= 0))
+      && (!('civiliansRescued' in data) || (data.civiliansRescued is number && data.civiliansRescued >= 0))
+      && (!('evidenceFound' in data) || (data.evidenceFound is number && data.evidenceFound >= 0))
+      && (!('iaViolations' in data) || (data.iaViolations is number && data.iaViolations >= 0))
+      && data.unlockedWeapons is list && data.unlockedWeapons.size() <= 50
+      && data.completedMissions is list && data.completedMissions.size() <= 50
+      && (!('solvedCases' in data) || (data.solvedCases is list && data.solvedCases.size() <= 50))
+      && (!('weaponUpgradeLevels' in data) || data.weaponUpgradeLevels is map)
+      && (!('outfit' in data) || (data.outfit is string && data.outfit.size() <= 64))
+      && (!('vehicleColor' in data) || (data.vehicleColor is string && data.vehicleColor.size() <= 32))
+      && (!('sirenType' in data) || (data.sirenType is string && data.sirenType.size() <= 32))
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    // Players Collection
+    match /players/{playerId} {
+      // Single-document read restricted to authenticated owner
+      allow get: if isOwner(playerId) && isValidId(playerId);
+
+      // Deny bulk listing to protect player privacy
+      allow list: if false;
+
+      // Profile creation
+      allow create: if isOwner(playerId)
+        && isValidId(playerId)
+        && isValidPlayerProfile(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // Profile updates
+      allow update: if isOwner(playerId)
+        && isValidId(playerId)
+        && isValidPlayerProfile(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      // Player document deletion forbidden
+      allow delete: if false;
+    }
+  }
+}

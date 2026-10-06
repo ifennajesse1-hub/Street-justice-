@@ -18,6 +18,11 @@ import {
   CloudRain,
   Radio,
   Lock,
+  Cloud,
+  Database,
+  LogIn,
+  LogOut,
+  RotateCw,
 } from 'lucide-react';
 import { Mission, PlayerStats, WeaponConfig, TimeOfDay, WeatherType } from '../types/game';
 
@@ -39,6 +44,12 @@ interface MainMenuProps {
   onChangeWeather: (weather: WeatherType) => void;
   isMuted: boolean;
   onToggleMute: () => void;
+  authUser?: { uid: string; email?: string | null; displayName?: string | null; isAnonymous: boolean } | null;
+  cloudSyncStatus?: 'synced' | 'saving' | 'offline';
+  lastSavedAt?: Date | null;
+  onLoginWithGoogle?: () => void;
+  onLogout?: () => void;
+  onManualSave?: () => void;
 }
 
 export const MainMenu: React.FC<MainMenuProps> = ({
@@ -59,6 +70,12 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onChangeWeather,
   isMuted,
   onToggleMute,
+  authUser,
+  cloudSyncStatus = 'synced',
+  lastSavedAt,
+  onLoginWithGoogle,
+  onLogout,
+  onManualSave,
 }) => {
   const [activeSubView, setActiveSubView] = useState<'main' | 'missions' | 'settings'>('main');
 
@@ -93,18 +110,82 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             </p>
           </div>
 
-          {/* Officer Quick Badge */}
-          <div className="bg-slate-900/80 border border-slate-800 p-3 sm:p-4 rounded-xl backdrop-blur-md hidden sm:flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
-              <Shield className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="font-['Chakra_Petch'] font-bold text-sm text-slate-100">
-                OFFICER ALEX CARTER
+          {/* Officer Quick Badge & Firebase Cloud Status */}
+          <div className="flex flex-col sm:flex-row items-end sm:items-center gap-3">
+            <div className="bg-slate-900/80 border border-slate-800 p-3 sm:p-4 rounded-xl backdrop-blur-md hidden sm:flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+                <Shield className="w-6 h-6" />
               </div>
-              <div className="text-xs text-blue-400 font-semibold">{stats.rankName}</div>
-              <div className="text-[11px] text-emerald-400 font-mono font-bold mt-0.5">
-                ${stats.money.toLocaleString()} · {stats.xp} XP
+              <div>
+                <div className="font-['Chakra_Petch'] font-bold text-sm text-slate-100">
+                  OFFICER ALEX CARTER
+                </div>
+                <div className="text-xs text-blue-400 font-semibold">{stats.rankName}</div>
+                <div className="text-[11px] text-emerald-400 font-mono font-bold mt-0.5">
+                  ${stats.money.toLocaleString()} · {stats.xp} XP
+                </div>
+              </div>
+            </div>
+
+            {/* Cloud Firestore & Google Account Card */}
+            <div className="bg-slate-900/90 border border-cyan-500/40 p-3 rounded-xl backdrop-blur-md flex flex-col gap-1.5 shadow-lg min-w-[210px]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Cloud className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="font-['Chakra_Petch'] font-bold text-[10px] uppercase text-cyan-300">
+                    CLOUD FIRESTORE
+                  </span>
+                </div>
+                <span
+                  className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold ${
+                    cloudSyncStatus === 'saving'
+                      ? 'bg-amber-950 text-amber-300'
+                      : cloudSyncStatus === 'offline'
+                      ? 'bg-slate-800 text-slate-400'
+                      : 'bg-emerald-950 text-emerald-300'
+                  }`}
+                >
+                  {cloudSyncStatus === 'saving' ? 'SYNCING' : 'SAVED'}
+                </span>
+              </div>
+
+              <div className="text-[11px] text-slate-300 truncate">
+                {authUser?.isAnonymous ? (
+                  <span className="text-slate-400 italic">Guest Session</span>
+                ) : (
+                  <span className="text-slate-200 font-semibold">{authUser?.email || 'Google Player'}</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {authUser?.isAnonymous && onLoginWithGoogle && (
+                  <button
+                    onClick={onLoginWithGoogle}
+                    className="flex-1 py-1.5 px-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-[10px] font-['Chakra_Petch'] font-bold flex items-center justify-center gap-1 shadow transition-transform active:scale-98"
+                  >
+                    <LogIn className="w-3 h-3" />
+                    <span>SAVE WITH GOOGLE</span>
+                  </button>
+                )}
+                {!authUser?.isAnonymous && onLogout && (
+                  <button
+                    onClick={onLogout}
+                    className="py-1 px-2 bg-red-950/70 hover:bg-red-900 text-red-200 border border-red-800/60 rounded text-[10px] font-['Chakra_Petch'] flex items-center justify-center gap-1 transition-colors"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    <span>SIGN OUT</span>
+                  </button>
+                )}
+                {onManualSave && (
+                  <button
+                    onClick={onManualSave}
+                    disabled={cloudSyncStatus === 'saving'}
+                    className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 text-[10px]"
+                    title="Sync progress to Firestore"
+                  >
+                    <RotateCw className={`w-3 h-3 ${cloudSyncStatus === 'saving' ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
               </div>
             </div>
           </div>
