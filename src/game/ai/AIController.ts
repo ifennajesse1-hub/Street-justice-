@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EnemyEntity, CivilianEntity, EnemyType, PoliceNPCEntity, MilitaryNPCEntity, GangFactionId, WeaponConfig } from '../../types/game';
+import { EnemyEntity, CivilianEntity, EnemyType, PoliceNPCEntity, MilitaryNPCEntity, GangFactionId, WeaponConfig, FictionalValuable } from '../../types/game';
 import { CharacterRig, updateCharacterAnimation } from '../engine/CharacterModels';
 import { CollisionBox, getGroundElevation } from '../engine/CityGenerator';
 import { PEDESTRIAN_ROUTES, PedestrianInitialConfig } from './PedestrianSystem';
@@ -38,6 +38,15 @@ export class AIController {
   public onRadioCallout?: (callout: string, type: 'info' | 'alert' | 'success') => void;
   public onPedestrianShout?: (civ: CivilianEntity, text: string) => void;
   public onEnemyArrested?: (enemy: EnemyEntity) => void;
+  public onEnemyKilledByPolice?: (enemy: EnemyEntity, officer: PoliceNPCEntity) => void;
+
+  // Officer Carter Double-Life State tracking (police reputation, underworld trust, internal affairs heat)
+  public carterDoubleLife: { policeRep: number; underworldRep: number; suspicionLevel: number } = {
+    policeRep: 85,
+    underworldRep: 15,
+    suspicionLevel: 10,
+  };
+  private suspicionRadioTimer: number = 25;
 
   constructor() {}
 
@@ -119,6 +128,35 @@ export class AIController {
       weaponSpread = 0.04;
     }
 
+    const lootCash = Math.floor(Math.random() * (isBoss ? 800 : isEnforcer ? 350 : 200)) + (isBoss ? 600 : 180);
+    const lootValuable: FictionalValuable = {
+      id: `val_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: isBoss
+        ? 'Diamond Syndicate Signet Ring'
+        : faction === 'iron_vipers'
+        ? 'Viper Cartel Weapons Ledger'
+        : faction === 'neon_pythons'
+        ? 'High-Purity Street Narcotics Pouch'
+        : faction === 'cobalt_skulls'
+        ? 'Heavy Solid-Gold Biker Chain'
+        : isSyndicate
+        ? 'Encrypted Syndicate Cyber-Drive'
+        : 'Stolen Swiss Luxury Timepiece',
+      estimatedValue: isBoss ? 2400 : isEnforcer ? 950 : 450,
+      category: isSyndicate ? 'crypto_drive' : 'jewels',
+      description: `Recovered contraband confiscated during arrest of ${defaultName}.`,
+      source: defaultName,
+      sourceLocation: factionName,
+      isContraband: true,
+      isStolenOrEvidence: true,
+    };
+
+    const lootCharges = [
+      isBoss ? 'RICO Syndicate Leadership & Racketeering' : 'Aggravated Armed Felony',
+      'Possession of Serial-Defaced Illegal Weapon',
+      'Conspiracy to Commit Violent Crime',
+    ];
+
     const enemy: EnemyEntity = {
       id: `enemy_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       type,
@@ -129,7 +167,7 @@ export class AIController {
       rotation: Math.random() * Math.PI * 2,
       health,
       maxHealth: health,
-      state: 'patrol',
+      state: 'normal',
       weapon: {
         id: weaponId,
         name: isSyndicate ? 'Eclipse Carbine' : isBoss ? 'Titan-AR' : isEnforcer ? 'Specter-45' : 'Vortex-9',
@@ -154,6 +192,12 @@ export class AIController {
         x: pos.x + (Math.random() - 0.5) * 16,
         y: 0,
         z: pos.z + (Math.random() - 0.5) * 16,
+      },
+      loot: {
+        stolenCash: lootCash,
+        weaponName: isSyndicate ? 'Eclipse Carbine' : isBoss ? 'Titan-AR' : isEnforcer ? 'Specter-45' : 'Vortex-9',
+        valuable: lootValuable,
+        charges: lootCharges,
       },
     };
 
@@ -355,7 +399,8 @@ export class AIController {
     camera?: THREE.Camera,
     gunshotFired: boolean = false,
     vehicles?: { entity: any; rig: any }[],
-    isPlayerAiming: boolean = false
+    isPlayerAiming: boolean = false,
+    playerYaw: number = 0
   ) {
     // ----------------------------------------------------
     // 1. UPDATE CRIMINALS / ENEMIES
@@ -422,10 +467,17 @@ export class AIController {
       // - Iron Vipers surrender only at <= 15% health (heavy discipline)
       // - Neon Pythons usually flee, surrender only if cornered (< 20%)
       // - Cobalt Skulls & street thugs surrender at <= 32% health
-      const surrenderThreshold = isSyndicate ? 0 : isViper ? 0.15 : isPython ? 0.20 : 0.32;
+      // - High Underworld reputation makes street criminals trust Carter and surrender much earlier to cut deals!
+      let surrenderThreshold = isSyndicate ? 0 : isViper ? 0.15 : isPython ? 0.20 : 0.32;
+      if (this.carterDoubleLife.underworldRep >= 40 && !isSyndicate) {
+        surrenderThreshold += 0.20; // 20% higher surrender threshold due to underworld trust
+      }
       if (e.health <= e.maxHealth * surrenderThreshold && e.type !== 'boss' && e.state !== 'surrendered') {
         if (Math.random() < 0.85) {
           e.state = 'surrendered';
+          if (this.carterDoubleLife.underworldRep >= 45 && Math.random() < 0.35) {
+            this.onRadioCallout?.(`${e.name}: "Hold up! Carter, we know you! Let's talk business!"`, 'info');
+          }
           updateCharacterAnimation(rig, 0, time, false, false, 'surrendered', camera, e.health / e.maxHealth);
           continue;
         }
@@ -518,8 +570,9 @@ export class AIController {
           }
         }
 
-        // Shoot at player only if active and in range
-        if (distToPlayer < e.weapon.range && e.health > 0) {
+        // Shoot at player only if active, in range, and has line of sight
+        const hasLOS = this.hasLineOfSight(e.position, playerPos, collisionBoxes);
+        if (distToPlayer < e.weapon.range && e.health > 0 && hasLOS) {
           if (e.shootCooldown <= 0) {
             e.shootCooldown = 1.0 / e.weapon.fireRate + Math.random() * 0.35;
             onEnemyShoot(e, playerPos);
@@ -733,7 +786,8 @@ export class AIController {
 
         // Fire service weapon at hostile criminal only if active and neither surrendered nor arrested
         p.shootCooldown -= delta;
-        const canShoot = closestEnemy.state !== 'surrendered' && closestEnemy.state !== 'arrested' && closestEnemy.state !== 'dead';
+        const policeHasLOS = this.hasLineOfSight(p.position, closestEnemy.position, collisionBoxes);
+        const canShoot = closestEnemy.state !== 'surrendered' && closestEnemy.state !== 'arrested' && closestEnemy.state !== 'dead' && policeHasLOS;
         if (canShoot && closestEnemyDist < p.weapon.range && p.shootCooldown <= 0) {
           p.shootCooldown = 1.0 / p.weapon.fireRate + Math.random() * 0.3;
           rig.recoilTimer = 0.14;
@@ -747,6 +801,7 @@ export class AIController {
           if (closestEnemy.health <= 0) {
             closestEnemy.state = 'dead';
             this.onRadioCallout?.(`${p.name}: "Suspect neutralized! Sector secure."`, 'info');
+            this.onEnemyKilledByPolice?.(closestEnemy, p);
           }
         }
 
@@ -767,10 +822,14 @@ export class AIController {
         rig.root.position.set(p.position.x, 0, p.position.z);
         updateCharacterAnimation(rig, moveSpeed, time, true, false, undefined, camera, p.health / p.maxHealth, { weaponCategory: p.weapon.category });
       } else if (p.isBackupUnit) {
-        // Backup officer follows Carter in tactical escort formation
+        // Backup officer follows Carter in dynamic tactical escort formation
         p.state = 'responding';
-        const targetX = playerPos.x + (p.squadOffset?.x ?? -2.5);
-        const targetZ = playerPos.z + (p.squadOffset?.z ?? -2.5);
+        const flankSign = (pIdx % 2 === 0) ? -1 : 1;
+        const sinYaw = Math.sin(playerYaw);
+        const cosYaw = Math.cos(playerYaw);
+        // Position behind Carter's shoulders (2.8m back, 2.2m to left/right flank)
+        const targetX = playerPos.x - sinYaw * 2.8 + cosYaw * (2.2 * flankSign);
+        const targetZ = playerPos.z - cosYaw * 2.8 - sinYaw * (2.2 * flankSign);
         const fdx = targetX - p.position.x;
         const fdz = targetZ - p.position.z;
         const distToFormation = Math.hypot(fdx, fdz);
@@ -787,6 +846,12 @@ export class AIController {
           if (!this.checkCollision(nextX, nextZ, collisionBoxes)) {
             p.position.x = nextX;
             p.position.z = nextZ;
+          } else {
+            if (!this.checkCollision(nextX, p.position.z, collisionBoxes)) {
+              p.position.x = nextX;
+            } else if (!this.checkCollision(p.position.x, nextZ, collisionBoxes)) {
+              p.position.z = nextZ;
+            }
           }
 
           rig.root.position.set(p.position.x, 0, p.position.z);
@@ -799,7 +864,7 @@ export class AIController {
             undefined,
             camera,
             p.health / p.maxHealth,
-            { weaponCategory: p.weapon.category }
+            { weaponCategory: p.weapon.category, delta: delta }
           );
         } else {
           // Reached formation: hold position, face outward in alert guard stance
@@ -820,6 +885,32 @@ export class AIController {
             p.health / p.maxHealth,
             { weaponCategory: p.weapon.category }
           );
+
+          // Periodic Double-Life reaction dialogue from backup officers
+          this.suspicionRadioTimer -= delta;
+          if (this.suspicionRadioTimer <= 0) {
+            this.suspicionRadioTimer = 35 + Math.random() * 25;
+            if (this.carterDoubleLife.suspicionLevel >= 75) {
+              const warnings = [
+                `${p.name}: "Carter... IA is auditing shift arrest logs for Unit 24. Watch your back."`,
+                `${p.name}: "Word around Precinct 9 is IA has eyes on your sector, Alex. Don't slip up."`,
+                `${p.name}: "Chief requested copies of every field seizure made today. Keep it clean."`,
+              ];
+              this.onRadioCallout?.(warnings[Math.floor(Math.random() * warnings.length)], 'alert');
+            } else if (this.carterDoubleLife.suspicionLevel >= 50) {
+              const notes = [
+                `${p.name}: "Internal Affairs has been sniffing around our evidence lockers lately."`,
+                `${p.name}: "Make sure all your chain of custody logs are straight, Carter."`,
+              ];
+              this.onRadioCallout?.(notes[Math.floor(Math.random() * notes.length)], 'info');
+            } else if (this.carterDoubleLife.policeRep >= 80) {
+              const praise = [
+                `${p.name}: "Good to have you running point, Carter. Precinct 9 counts on you."`,
+                `${p.name}: "Solid lawful policing today, Alex. Dispatch logged your clean commendations."`,
+              ];
+              this.onRadioCallout?.(praise[Math.floor(Math.random() * praise.length)], 'success');
+            }
+          }
         }
       } else {
         // Peaceful patrol on sidewalks
@@ -1185,6 +1276,46 @@ export class AIController {
       }
     }
     return nearest;
+  }
+
+  public hasLineOfSight(
+    p1: { x: number; z: number },
+    p2: { x: number; z: number },
+    boxes: CollisionBox[]
+  ): boolean {
+    const dx = p2.x - p1.x;
+    const dz = p2.z - p1.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.2) return true;
+
+    for (const b of boxes) {
+      if (b.height && b.height < 1.1) continue; // low barriers don't block full standing sight
+      let tmin = 0.0;
+      let tmax = 1.0;
+
+      if (Math.abs(dx) > 1e-7) {
+        const tx1 = (b.minX - p1.x) / dx;
+        const tx2 = (b.maxX - p1.x) / dx;
+        tmin = Math.max(tmin, Math.min(tx1, tx2));
+        tmax = Math.min(tmax, Math.max(tx1, tx2));
+      } else if (p1.x < b.minX || p1.x > b.maxX) {
+        continue;
+      }
+
+      if (Math.abs(dz) > 1e-7) {
+        const tz1 = (b.minZ - p1.z) / dz;
+        const tz2 = (b.maxZ - p1.z) / dz;
+        tmin = Math.max(tmin, Math.min(tz1, tz2));
+        tmax = Math.min(tmax, Math.max(tz1, tz2));
+      } else if (p1.z < b.minZ || p1.z > b.maxZ) {
+        continue;
+      }
+
+      if (tmax >= tmin && tmin < 1.0 && tmax > 0.0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private checkCollision(x: number, z: number, boxes: CollisionBox[]): boolean {

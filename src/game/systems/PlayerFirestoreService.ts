@@ -30,6 +30,14 @@ export interface PlayerCloudDocument {
   outfit: string;
   vehicleColor: string;
   sirenType: string;
+  integrity?: number;
+  bankSavings?: number;
+  policeReputation?: number;
+  underworldReputation?: number;
+  suspicionLevel?: number;
+  dirtyCash?: number;
+  legitimateEarnings?: number;
+  secretEarnings?: number;
   createdAt?: Timestamp | any;
   updatedAt?: Timestamp | any;
 }
@@ -73,6 +81,12 @@ export async function createPlayerProfile(
     rank: stats.rank,
     rankName: stats.rankName,
     reputation: stats.reputation,
+    policeReputation: stats.policeReputation ?? stats.reputation,
+    underworldReputation: stats.underworldReputation ?? 15,
+    suspicionLevel: stats.suspicionLevel ?? 10,
+    dirtyCash: stats.dirtyCash ?? 0,
+    legitimateEarnings: stats.legitimateEarnings ?? stats.money,
+    secretEarnings: stats.secretEarnings ?? 0,
     integrity: stats.integrity ?? 75,
     bankSavings: stats.bankSavings ?? 0,
     kills: stats.kills,
@@ -124,6 +138,12 @@ export async function updatePlayerProfile(
     rank: stats.rank,
     rankName: stats.rankName,
     reputation: stats.reputation,
+    policeReputation: stats.policeReputation ?? stats.reputation,
+    underworldReputation: stats.underworldReputation ?? 15,
+    suspicionLevel: stats.suspicionLevel ?? 10,
+    dirtyCash: stats.dirtyCash ?? 0,
+    legitimateEarnings: stats.legitimateEarnings ?? stats.money,
+    secretEarnings: stats.secretEarnings ?? 0,
     integrity: stats.integrity ?? 75,
     bankSavings: stats.bankSavings ?? 0,
     kills: stats.kills,

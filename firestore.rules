@@ -38,7 +38,9 @@ service cloud.firestore {
         'kills', 'arrests', 'missionsCompleted', 'civiliansRescued',
         'evidenceFound', 'iaViolations', 'unlockedWeapons', 'weaponUpgradeLevels',
         'completedMissions', 'solvedCases', 'outfit', 'vehicleColor',
-        'sirenType', 'createdAt', 'updatedAt'
+        'sirenType', 'createdAt', 'updatedAt',
+        'integrity', 'bankSavings', 'policeReputation', 'underworldReputation',
+        'suspicionLevel', 'dirtyCash', 'legitimateEarnings', 'secretEarnings'
       ])
       && data.userId is string && data.userId.size() <= 128
       && data.money is number && data.money >= 0
@@ -46,6 +48,14 @@ service cloud.firestore {
       && data.rank is number && data.rank >= 1 && data.rank <= 20
       && data.rankName is string && data.rankName.size() <= 64
       && data.reputation is number && data.reputation >= 0 && data.reputation <= 100
+      && (!('integrity' in data) || (data.integrity is number && data.integrity >= 0 && data.integrity <= 100))
+      && (!('bankSavings' in data) || (data.bankSavings is number && data.bankSavings >= 0))
+      && (!('policeReputation' in data) || (data.policeReputation is number && data.policeReputation >= 0 && data.policeReputation <= 100))
+      && (!('underworldReputation' in data) || (data.underworldReputation is number && data.underworldReputation >= 0 && data.underworldReputation <= 100))
+      && (!('suspicionLevel' in data) || (data.suspicionLevel is number && data.suspicionLevel >= 0 && data.suspicionLevel <= 100))
+      && (!('dirtyCash' in data) || (data.dirtyCash is number && data.dirtyCash >= 0))
+      && (!('legitimateEarnings' in data) || (data.legitimateEarnings is number && data.legitimateEarnings >= 0))
+      && (!('secretEarnings' in data) || (data.secretEarnings is number && data.secretEarnings >= 0))
       && (!('kills' in data) || (data.kills is number && data.kills >= 0))
       && (!('arrests' in data) || (data.arrests is number && data.arrests >= 0))
       && (!('missionsCompleted' in data) || (data.missionsCompleted is number && data.missionsCompleted >= 0))

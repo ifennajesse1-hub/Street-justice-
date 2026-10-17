@@ -23,19 +23,29 @@ import {
   Users,
   ShieldAlert,
   Compass,
+  Volume2,
+  VolumeX,
+  Music,
+  Disc3,
+  Pause,
+  Play,
+  Sparkles,
 } from 'lucide-react';
-import { Mission, WeaponConfig, PlayerStats, TimeOfDay, WeatherType, CustomizationSettings, EvidenceItem, DynamicEvent } from '../types/game';
+import { Mission, WeaponConfig, PlayerStats, TimeOfDay, WeatherType, CustomizationSettings, EvidenceItem, DynamicEvent, PlayerProfileSettings } from '../types/game';
 import { RANKS, getRankForXP } from '../game/systems/ProgressionSystem';
 import { CrimeCase, CRIME_CASES } from '../game/systems/InvestigationSystem';
 import { FACTIONS_DATA, FactionInfo } from '../game/systems/FactionData';
 import { cityIncidentManager } from '../game/systems/DynamicEventsSystem';
 import { Cloud, RotateCw, LogIn, LogOut, CheckCircle, Database } from 'lucide-react';
+import { TrackInfo, MusicTheme, SOUNDTRACK_TRACKS } from '../game/audio/CinematicMusicEngine';
 
 interface PauseMenuProps {
   isOpen: boolean;
   onClose: () => void;
   missions: Mission[];
   currentMissionId?: string;
+  playerProfile?: PlayerProfileSettings;
+  onOpenEditProfile?: () => void;
   onSelectMission: (missionId: string) => void;
   weapons: WeaponConfig[];
   stats: PlayerStats;
@@ -43,6 +53,8 @@ interface PauseMenuProps {
   onUpgradeArmorOrHealth: (type: 'armor' | 'health') => void;
   customization: CustomizationSettings;
   onChangeOutfit: (outfit: CustomizationSettings['outfit']) => void;
+  characterAesthetic?: 'realistic' | 'blocky' | 'prototype';
+  onChangeCharacterAesthetic?: (aesthetic: 'realistic' | 'blocky' | 'prototype') => void;
   timeOfDay: TimeOfDay;
   weather: WeatherType;
   onChangeTimeOfDay: (time: TimeOfDay) => void;
@@ -50,6 +62,18 @@ interface PauseMenuProps {
   cases?: CrimeCase[];
   evidenceList?: EvidenceItem[];
   onSolveCase?: (caseId: string) => void;
+  musicVolume?: number;
+  sfxVolume?: number;
+  onChangeMusicVolume?: (vol: number) => void;
+  onChangeSfxVolume?: (vol: number) => void;
+  isMusicMuted?: boolean;
+  isSfxMuted?: boolean;
+  onToggleMusicMute?: () => void;
+  onToggleSfxMute?: () => void;
+  isMusicPaused?: boolean;
+  onToggleMusicPause?: () => void;
+  currentTrackInfo?: TrackInfo;
+  onSelectTheme?: (theme: MusicTheme) => void;
   authUser?: { uid: string; email?: string | null; displayName?: string | null; isAnonymous: boolean } | null;
   cloudSyncStatus?: 'synced' | 'saving' | 'offline';
   lastSavedAt?: Date | null;
@@ -57,6 +81,7 @@ interface PauseMenuProps {
   onLogout?: () => void;
   onManualSave?: () => void;
   onRespondIncident?: (incident: DynamicEvent) => void;
+  onPlayPrologue?: () => void;
 }
 
 export const PauseMenu: React.FC<PauseMenuProps> = ({
@@ -64,13 +89,18 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onClose,
   missions,
   currentMissionId,
+  playerProfile,
+  onOpenEditProfile,
   onSelectMission,
+  onPlayPrologue,
   weapons,
   stats,
   onBuyOrUpgradeWeapon,
   onUpgradeArmorOrHealth,
   customization,
   onChangeOutfit,
+  characterAesthetic = 'prototype',
+  onChangeCharacterAesthetic,
   timeOfDay,
   weather,
   onChangeTimeOfDay,
@@ -78,6 +108,18 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   cases = CRIME_CASES,
   evidenceList = [],
   onSolveCase,
+  musicVolume = 0.65,
+  sfxVolume = 0.75,
+  onChangeMusicVolume,
+  onChangeSfxVolume,
+  isMusicMuted = false,
+  isSfxMuted = false,
+  onToggleMusicMute,
+  onToggleSfxMute,
+  isMusicPaused = false,
+  onToggleMusicPause,
+  currentTrackInfo,
+  onSelectTheme,
   authUser,
   cloudSyncStatus = 'synced',
   lastSavedAt,
@@ -90,6 +132,8 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   const [selectedFactionId, setSelectedFactionId] = useState<string>('cedar_heights');
 
   if (!isOpen) return null;
+
+  const activeTrack = currentTrackInfo || SOUNDTRACK_TRACKS.exploration;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-6 select-none font-['Inter',sans-serif]">
@@ -110,14 +154,22 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 <span className="text-blue-400 font-bold">{stats.rankName} (Rank {stats.rank})</span>
                 <span aria-hidden="true">·</span>
                 <span className="text-emerald-400 font-mono font-bold">${stats.money.toLocaleString()} Cash</span>
+                {(stats.dirtyCash ?? 0) > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-amber-400 font-mono font-bold">+${(stats.dirtyCash ?? 0).toLocaleString()} Dirty</span>
+                  </>
+                )}
                 <span aria-hidden="true">·</span>
                 <span className="text-cyan-300 font-mono font-bold">${(stats.bankSavings || 0).toLocaleString()} Bank</span>
                 <span aria-hidden="true">·</span>
-                <span className={`${(stats.integrity ?? 80) >= 65 ? 'text-emerald-400' : (stats.integrity ?? 80) >= 40 ? 'text-amber-400' : 'text-purple-400'} font-mono font-semibold`}>
-                  {stats.integrity ?? 80}% Integrity
-                </span>
+                <span className="text-blue-400 font-mono font-semibold">{stats.policeReputation ?? stats.reputation}% Police</span>
                 <span aria-hidden="true">·</span>
-                <span className="text-purple-400 font-mono font-semibold">{stats.reputation}% REP</span>
+                <span className="text-purple-400 font-mono font-semibold">{stats.underworldReputation ?? 15}% Crime</span>
+                <span aria-hidden="true">·</span>
+                <span className={`${(stats.suspicionLevel ?? 10) >= 50 ? 'text-red-400' : 'text-amber-400'} font-mono font-semibold`}>
+                  {stats.suspicionLevel ?? 10}% IA Heat
+                </span>
               </div>
             </div>
           </div>
@@ -225,9 +277,51 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
           {/* TAB 1: MISSIONS */}
           {activeTab === 'missions' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* FEATURED STORY PROLOGUE CARD */}
+              {onPlayPrologue && (
+                <div
+                  onClick={() => {
+                    onClose();
+                    onPlayPrologue();
+                  }}
+                  className="border border-cyan-500/50 bg-gradient-to-br from-slate-900/90 via-blue-950/30 to-slate-950 hover:border-cyan-400 rounded-xl p-4 flex flex-col justify-between transition-all md:col-span-2 cursor-pointer shadow-[0_0_20px_rgba(6,182,212,0.15)] active:scale-[0.99]"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-xs mb-1">
+                        <span className="font-['Chakra_Petch'] text-cyan-400 font-bold uppercase tracking-wider">
+                          ORIGIN STORY · PROLOGUE
+                        </span>
+                        <span className="text-cyan-300 font-bold text-[10px] bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-600/50">
+                          YOUNG CARTER
+                        </span>
+                      </div>
+                      <div className="font-['Chakra_Petch'] font-black text-base text-slate-100 flex items-center gap-2">
+                        <span>The Tenements of Oakridge: Before the Badge</span>
+                        <Sparkles className="w-4 h-4 text-cyan-400 animate-pulse" />
+                      </div>
+                      <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                        Experience Young Carter's humble origins, poverty and street crime in the Oakridge district, his mother Elena's warning ("Never let this world change your heart"), and the playable tutorial introducing movement and neighborhood choices in stylized blocky 3D.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white rounded-lg font-['Chakra_Petch'] font-bold text-xs uppercase tracking-wider shrink-0 flex items-center justify-center gap-1.5 shadow"
+                    >
+                      <span>REPLAY PROLOGUE</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
               {missions.map((m) => {
                 const isSelected = m.id === currentMissionId;
-                const canPlay = stats.rank >= m.requiredRank || m.unlocked;
+                const polTrust = stats.policeReputation ?? stats.reputation;
+                const underRep = stats.underworldReputation ?? 15;
+
+                const meetsTrust = m.requiredPoliceTrust ? polTrust >= m.requiredPoliceTrust : true;
+                const meetsUnderworld = m.requiredUnderworldRep ? underRep >= m.requiredUnderworldRep : true;
+                const canPlay = (stats.rank >= m.requiredRank || m.unlocked) && meetsTrust && meetsUnderworld;
 
                 return (
                   <div
@@ -240,9 +334,21 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   >
                     <div>
                       <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="font-['Chakra_Petch'] text-blue-400 font-bold uppercase tracking-wider">
-                          Chapter {m.chapter}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-['Chakra_Petch'] text-blue-400 font-bold uppercase tracking-wider">
+                            Chapter {m.chapter}
+                          </span>
+                          {m.requiredPoliceTrust && (
+                            <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold border ${meetsTrust ? 'bg-blue-950 text-blue-300 border-blue-600/40' : 'bg-slate-900 text-slate-500 border-slate-700'}`}>
+                              Req: {m.requiredPoliceTrust}% Police Trust
+                            </span>
+                          )}
+                          {m.requiredUnderworldRep && (
+                            <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold border ${meetsUnderworld ? 'bg-purple-950 text-purple-300 border-purple-600/40' : 'bg-slate-900 text-slate-500 border-slate-700'}`}>
+                              Req: {m.requiredUnderworldRep}% Underworld Rep
+                            </span>
+                          )}
+                        </div>
                         {m.completed && (
                           <span className="text-emerald-400 text-[11px] flex items-center gap-1 font-bold">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Cleared
@@ -273,7 +379,17 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                             : 'bg-slate-900 text-slate-600 cursor-not-allowed'
                         }`}
                       >
-                        <span>{isSelected ? 'IN PROGRESS' : canPlay ? 'DEPLOY' : `LOCKED (RANK ${m.requiredRank})`}</span>
+                        <span>
+                          {isSelected
+                            ? 'IN PROGRESS'
+                            : canPlay
+                            ? 'DEPLOY'
+                            : !meetsTrust
+                            ? `REQ ${m.requiredPoliceTrust}% POLICE TRUST`
+                            : !meetsUnderworld
+                            ? `REQ ${m.requiredUnderworldRep}% CRIME REP`
+                            : `LOCKED (RANK ${m.requiredRank})`}
+                        </span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -1018,6 +1134,179 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 </div>
               </div>
 
+              {/* Officer Profile Settings & Callsign Card */}
+              <div className="bg-slate-900/80 border border-blue-500/40 rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 font-bold">
+                    <User className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-['Chakra_Petch'] font-black text-base text-slate-100 uppercase tracking-wide">
+                        {playerProfile?.callsign || 'Officer Carter'}
+                      </span>
+                      {playerProfile?.age && (
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                          {playerProfile.age} YRS
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2 mt-0.5 flex-wrap">
+                      <span className="text-blue-400 font-bold uppercase">
+                        {(playerProfile?.difficulty || 'normal')} Difficulty
+                      </span>
+                      <span>·</span>
+                      <span className="text-purple-400 font-bold uppercase">
+                        {(playerProfile?.playStyle || 'balanced').replace('_', ' ')} Style
+                      </span>
+                      <span>·</span>
+                      <span className="text-cyan-300">
+                        {customization.outfit === 'tactical_swat' ? 'Tactical SWAT' : customization.outfit === 'detective' ? 'Undercover Detective' : 'Precinct 9 Patrol'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {onOpenEditProfile && (
+                  <button
+                    onClick={onOpenEditProfile}
+                    className="px-3.5 py-2 rounded-xl bg-blue-600/90 hover:bg-blue-500 text-white font-['Chakra_Petch'] text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow transition-all active:scale-95 cursor-pointer shrink-0"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>EDIT PROFILE</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Officer Carter Double-Life System Dossier */}
+              <div className="bg-gradient-to-br from-slate-900/90 via-slate-950 to-indigo-950/40 border border-slate-700/80 rounded-2xl p-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3 mb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-bold">
+                      ⚖
+                    </div>
+                    <div>
+                      <h4 className="font-['Chakra_Petch'] font-bold text-sm text-slate-100 uppercase tracking-wide">
+                        OFFICER CARTER'S DOUBLE-LIFE RECORD
+                      </h4>
+                      <p className="text-[11px] text-slate-400">
+                        Bad Cop in Sheep's Clothing · Balancing Official Precinct Duties & Street Interests
+                      </p>
+                    </div>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-[10px] font-['Chakra_Petch'] font-bold uppercase tracking-wider text-amber-300">
+                    {(stats.policeReputation ?? stats.reputation) >= 75 && (stats.suspicionLevel ?? 10) < 30
+                      ? 'MODEL PRECINCT DETECTIVE'
+                      : (stats.underworldReputation ?? 15) >= 50
+                      ? 'UNDERWORLD FIXER IN BLUE'
+                      : (stats.suspicionLevel ?? 10) >= 60
+                      ? 'INTERNAL AFFAIRS TARGET'
+                      : 'STREET PRAGMATIST'}
+                  </div>
+                </div>
+
+                {/* 3 Reputation Meters */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                  {/* Police Reputation */}
+                  <div className="bg-slate-950/70 border border-blue-900/40 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-['Chakra_Petch'] font-bold uppercase text-blue-400">
+                        Police Reputation
+                      </span>
+                      <span className="font-mono text-xs font-bold text-blue-300">
+                        {stats.policeReputation ?? stats.reputation}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-600 to-cyan-400 transition-all duration-300"
+                        style={{ width: `${stats.policeReputation ?? stats.reputation}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Standing with Chief & Precinct 9 officers
+                    </span>
+                  </div>
+
+                  {/* Underworld Reputation */}
+                  <div className="bg-slate-950/70 border border-purple-900/40 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-['Chakra_Petch'] font-bold uppercase text-purple-400">
+                        Underworld Trust
+                      </span>
+                      <span className="font-mono text-xs font-bold text-purple-300">
+                        {stats.underworldReputation ?? 15}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className="h-full bg-gradient-to-r from-purple-600 to-pink-500 transition-all duration-300"
+                        style={{ width: `${stats.underworldReputation ?? 15}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Respect from syndicate bosses & informants
+                    </span>
+                  </div>
+
+                  {/* IA Suspicion */}
+                  <div className="bg-slate-950/70 border border-red-900/40 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-['Chakra_Petch'] font-bold uppercase text-amber-400">
+                        Internal Affairs Heat
+                      </span>
+                      <span className={`font-mono text-xs font-bold ${(stats.suspicionLevel ?? 10) >= 50 ? 'text-red-400' : 'text-amber-300'}`}>
+                        {stats.suspicionLevel ?? 10}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          (stats.suspicionLevel ?? 10) >= 50
+                            ? 'bg-gradient-to-r from-amber-500 to-red-500'
+                            : 'bg-gradient-to-r from-yellow-500 to-amber-500'
+                        }`}
+                        style={{ width: `${stats.suspicionLevel ?? 10}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Watchdog audits & backup officer suspicion
+                    </span>
+                  </div>
+                </div>
+
+                {/* Two Types of Earnings */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+                  <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+                    <div>
+                      <span className="text-[10px] font-['Chakra_Petch'] text-emerald-400 uppercase font-bold block">
+                        Legitimate Police Income
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Official salary, case rewards & lawful arrest bonuses
+                      </span>
+                    </div>
+                    <span className="font-mono text-sm font-bold text-emerald-400">
+                      +${(stats.legitimateEarnings ?? stats.money).toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+                    <div>
+                      <span className="text-[10px] font-['Chakra_Petch'] text-amber-400 uppercase font-bold block">
+                        Secret Underworld Income
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Bribes, shakedown payoffs, pocketed cash & fenced contraband
+                      </span>
+                    </div>
+                    <span className="font-mono text-sm font-bold text-amber-400">
+                      +${(stats.secretEarnings ?? 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Career Stats Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl">
@@ -1174,6 +1463,69 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   })}
                 </div>
               </div>
+
+              {/* 3D CHARACTER VISUAL STYLE (ROBLOX-INSPIRED PROTOTYPE) */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-['Chakra_Petch'] text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Character 3D Visual Style (Prototype)
+                  </h4>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-cyan-400 border border-blue-800 font-bold">
+                    EXPERIMENTAL
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mb-3">
+                  Explore stylized block-like character proportions with expressive faces, recognizable silhouettes, and authentic uniforms inspired by modern sandbox games.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    {
+                      id: 'prototype',
+                      title: 'Prototype Cohort',
+                      badge: 'RECOMMENDED',
+                      desc: 'Neighborhood story NPCs (Young Carter, Mom, Mrs. Gable, Marcus) & select officers use blocky style.',
+                    },
+                    {
+                      id: 'blocky',
+                      title: 'Blocky Stylized',
+                      badge: 'ALL CHARACTERS',
+                      desc: 'All police officers, criminals, and citizens use the stylized blocky 3D character design.',
+                    },
+                    {
+                      id: 'realistic',
+                      title: 'Realistic Urban',
+                      badge: 'CLASSIC PBR',
+                      desc: 'Standard detailed urban pedestrian and police 3D models with organic joints.',
+                    },
+                  ].map((style) => {
+                    const active = characterAesthetic === style.id;
+                    return (
+                      <button
+                        key={style.id}
+                        type="button"
+                        onClick={() => onChangeCharacterAesthetic?.(style.id as any)}
+                        className={`p-3.5 rounded-xl border text-left flex flex-col justify-between transition-all cursor-pointer ${
+                          active
+                            ? 'border-cyan-500 bg-cyan-950/40 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
+                            : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-['Chakra_Petch'] font-bold text-xs uppercase text-slate-100">
+                              {style.title}
+                            </span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-slate-950 border border-slate-800 text-slate-400 font-semibold">
+                              {style.badge}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 leading-snug">{style.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1235,6 +1587,144 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                       </button>
                     );
                   })}
+                </div>
+              </div>
+
+              {/* AUDIO & CINEMATIC SOUNDTRACK MIXER */}
+              <div className="pt-4 border-t border-slate-800/80 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Music className="w-4 h-4 text-cyan-400" />
+                    <h4 className="font-['Chakra_Petch'] text-xs font-bold uppercase tracking-wider text-slate-200">
+                      Cinematic Soundtrack & Audio Mixer
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800/60 font-semibold">
+                    {isMusicPaused ? 'PAUSED' : isMusicMuted ? 'MUTED' : 'PLAYING'}
+                  </span>
+                </div>
+
+                {/* Now Playing Card */}
+                <div className="bg-slate-900/60 border border-slate-800 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+                      <Disc3 className="w-5 h-5 animate-spin" style={{ animationDuration: '6s' }} />
+                    </div>
+                    <div>
+                      <div className="font-['Chakra_Petch'] font-bold text-sm text-slate-100 flex items-center gap-2">
+                        <span>{activeTrack.title}</span>
+                        <span className="text-[9px] font-mono text-cyan-400 bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800/50">
+                          {activeTrack.genre}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400">{activeTrack.subtitle} · {activeTrack.key} · {activeTrack.bpm} BPM</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={onToggleMusicPause}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-['Chakra_Petch'] font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      {isMusicPaused ? <Play className="w-3.5 h-3.5 text-amber-400" /> : <Pause className="w-3.5 h-3.5 text-slate-400" />}
+                      <span>{isMusicPaused ? 'Resume Music' : 'Pause Music'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Volume Sliders & Mute Toggles Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Background Music */}
+                  <div className="bg-slate-900/40 border border-slate-800/80 p-3.5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                        <Disc3 className="w-3.5 h-3.5 text-cyan-400" />
+                        Music Volume
+                      </span>
+                      <span className="font-mono text-xs font-bold text-cyan-300">
+                        {Math.round((musicVolume ?? 0.65) * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={musicVolume ?? 0.65}
+                      onChange={(e) => onChangeMusicVolume?.(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                    />
+                    <button
+                      onClick={onToggleMusicMute}
+                      className={`w-full py-1 rounded text-xs font-['Chakra_Petch'] font-semibold flex items-center justify-center gap-1.5 border transition-all ${
+                        isMusicMuted
+                          ? 'bg-red-950/40 border-red-800 text-red-400'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {isMusicMuted ? <VolumeX className="w-3 h-3 text-red-400" /> : <Volume2 className="w-3 h-3 text-cyan-400" />}
+                      <span>{isMusicMuted ? 'Muted' : 'Active'}</span>
+                    </button>
+                  </div>
+
+                  {/* Sound Effects */}
+                  <div className="bg-slate-900/40 border border-slate-800/80 p-3.5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                        Sound Effects Volume
+                      </span>
+                      <span className="font-mono text-xs font-bold text-emerald-300">
+                        {Math.round((sfxVolume ?? 0.75) * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={sfxVolume ?? 0.75}
+                      onChange={(e) => onChangeSfxVolume?.(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-emerald-400"
+                    />
+                    <button
+                      onClick={onToggleSfxMute}
+                      className={`w-full py-1 rounded text-xs font-['Chakra_Petch'] font-semibold flex items-center justify-center gap-1.5 border transition-all ${
+                        isSfxMuted
+                          ? 'bg-red-950/40 border-red-800 text-red-400'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {isSfxMuted ? <VolumeX className="w-3 h-3 text-red-400" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
+                      <span>{isSfxMuted ? 'Muted' : 'Active'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Soundtrack Theme Switcher */}
+                <div>
+                  <div className="text-[10px] font-['Chakra_Petch'] uppercase font-bold text-slate-400 mb-2">
+                    Soundtrack Jukebox · Switch Themes:
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {(Object.keys(SOUNDTRACK_TRACKS) as MusicTheme[]).map((themeKey) => {
+                      const tInfo = SOUNDTRACK_TRACKS[themeKey];
+                      const isCurrent = activeTrack.id === themeKey;
+                      return (
+                        <button
+                          key={themeKey}
+                          onClick={() => onSelectTheme?.(themeKey)}
+                          className={`p-2 rounded-lg border text-left transition-all ${
+                            isCurrent
+                              ? 'bg-blue-950/80 border-blue-500 text-blue-200 shadow-md ring-1 ring-blue-500/40'
+                              : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          <div className="font-['Chakra_Petch'] font-bold text-[11px] truncate">{tInfo.title}</div>
+                          <div className="text-[9px] text-slate-500 truncate">{tInfo.subtitle}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>

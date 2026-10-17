@@ -18,7 +18,7 @@ export type EncounterState = 'READY' | 'ACTIVE' | 'COMPLETED' | 'COOLDOWN';
 
 export interface EncounterConfig {
   id: string;
-  type: 'hostage' | 'robbery' | 'pursuit' | 'gang_war' | 'prison_break' | 'disturbance' | 'fire' | 'accident' | 'disaster_crash' | 'civilian_emergency';
+  type: 'hostage' | 'robbery' | 'pursuit' | 'gang_war' | 'prison_break' | 'disturbance' | 'fire' | 'accident' | 'disaster_crash' | 'civilian_emergency' | string;
   title: string;
   missionId?: string;
   locationName: string;

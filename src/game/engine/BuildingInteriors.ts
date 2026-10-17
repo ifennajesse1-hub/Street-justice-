@@ -1,408 +1,754 @@
 import * as THREE from 'three';
-import { EnterableBuilding, EnterableBuildingId } from '../../types/game';
+import { EnterableBuilding, EnterableBuildingId, FictionalValuable } from '../../types/game';
+import { CollisionBox } from './CityGenerator';
+
+export type InteriorInteractableType =
+  | 'bank_teller'
+  | 'manager_safe'
+  | 'vault_door'
+  | 'vault_gold'
+  | 'cctv_console'
+  | 'atm_terminal'
+  | 'evidence_locker'
+  | 'police_armory'
+  | 'duty_desk'
+  | 'store_counter'
+  | 'backroom_safe'
+  | 'exit_door';
+
+export interface InteriorInteractable {
+  id: string;
+  type: InteriorInteractableType;
+  name: string;
+  prompt: string;
+  position: { x: number; y: number; z: number };
+  radius: number;
+  icon?: string;
+  isCompleted?: boolean;
+}
 
 export interface ActiveInteriorState {
   building: EnterableBuilding;
   exteriorPosition: { x: number; y: number; z: number };
   exteriorYaw: number;
   interiorGroup: THREE.Group;
-  interactiveObjects: {
-    type: 'evidence_locker' | 'bank_teller' | 'store_counter' | 'exit_door' | 'safehouse_stash';
-    position: THREE.Vector3;
-    prompt: string;
-    radius: number;
-  }[];
+  interiorSpawnPos: { x: number; y: number; z: number };
+  interiorSpawnYaw: number;
+  collisionBoxes: CollisionBox[];
+  interactiveObjects: InteriorInteractable[];
+  animatedVaultDoor?: {
+    doorMesh: THREE.Object3D;
+    wheelMesh: THREE.Object3D;
+    isOpen: boolean;
+    currentAngle: number;
+    targetAngle: number;
+  };
 }
 
 export const ENTERABLE_BUILDINGS: Record<EnterableBuildingId, EnterableBuilding> = {
+  metro_bank: {
+    id: 'metro_bank',
+    name: '1st National Metro Bank',
+    category: 'bank',
+    exteriorPos: { x: 45, y: 0.22, z: -30.5 },
+    entranceRadius: 4.2,
+    description: 'Financial district flagship branch. Armed tellers, safety deposit boxes, manager office & master vault.',
+    tagline: '1ST NATIONAL METRO COMMERCIAL TRUST',
+  },
   precinct_9: {
     id: 'precinct_9',
     name: 'Precinct 9 Police Station',
     category: 'police',
-    exteriorPos: { x: -45, y: 0.2, z: 28 },
-    entranceRadius: 3.2,
-    description: 'Metro Police Headquarters. Duty Sergeant desk, booking cells, and Evidence Locker.',
+    exteriorPos: { x: -45, y: 0.22, z: 28 },
+    entranceRadius: 4.2,
+    description: 'Metro Police Headquarters. Duty Sergeant desk, tactical armory, and official Evidence Locker.',
     tagline: 'METRO POLICE PRECINCT 9',
-  },
-  metro_bank: {
-    id: 'metro_bank',
-    name: 'Metro Corporate Bank',
-    category: 'bank',
-    exteriorPos: { x: 45, y: 0.2, z: -32 },
-    entranceRadius: 3.4,
-    description: 'Downtown commercial bank. Teller desks, cash deposits, and high-security Valuables Vault.',
-    tagline: 'METRO COMMERCIAL TRUST',
   },
   cedar_market: {
     id: 'cedar_market',
-    name: 'Cedar Heights Corner Store',
+    name: 'Eastside Bodega & 24/7 Market',
     category: 'shop',
-    exteriorPos: { x: -28, y: 0.2, z: 24 },
-    entranceRadius: 3.0,
-    description: 'Neighborhood grocery and convenience store. Supplies, cold drinks, and snacks.',
-    tagline: 'HEIGHTS CONVENIENCE & DELI',
-  },
-  soul_kitchen: {
-    id: 'soul_kitchen',
-    name: "Mama Leah's Soul Kitchen",
-    category: 'diner',
-    exteriorPos: { x: -66, y: 0.2, z: 14 },
-    entranceRadius: 3.2,
-    description: "Famous community soul kitchen. Hot skillet food, warm peach cobbler, and friendly locals.",
-    tagline: "MAMA LEAH'S SOUL FOOD",
-  },
-  marcus_auto: {
-    id: 'marcus_auto',
-    name: "Marcus's Precision Auto",
-    category: 'garage',
-    exteriorPos: { x: -66, y: 0.2, z: -14 },
-    entranceRadius: 3.4,
-    description: 'Independent garage and speed tuning shop. Classic project cars and mechanical tools.',
-    tagline: "MARCUS AUTO REPAIR & PERFORMANCE",
+    exteriorPos: { x: 14.8, y: 0.22, z: 2 },
+    entranceRadius: 4.0,
+    description: 'Neighborhood convenience market, cold drinks, emergency first-aid & backroom delivery safe.',
+    tagline: 'EASTSIDE 24/7 CONVENIENCE & DELI',
   },
 };
 
 /**
- * Procedural 3D Interior Generator for Enterable City Buildings
- * High performance PBR low-poly interior scenes placed in an isolated world zone (Y: -80)
+ * Builds a high-fidelity 3D interior for enterable buildings in an isolated world coordinate space (e.g. X: 200, Z: 200).
+ * Preserves physics, collisions, lighting, and performance without interfering with outdoor city scenes.
  */
 export function buildBuildingInterior(id: EnterableBuildingId): ActiveInteriorState {
-  const building = ENTERABLE_BUILDINGS[id];
+  const building = ENTERABLE_BUILDINGS[id] || ENTERABLE_BUILDINGS.metro_bank;
   const interiorGroup = new THREE.Group();
-  // Elevate interior to isolated coordinate space
-  const origin = new THREE.Vector3(0, -80, 0);
+
+  // Distinct isolated origin per building to allow instant zero-lag loading
+  let origin = new THREE.Vector3(200, 0, 200);
+  if (id === 'precinct_9') origin = new THREE.Vector3(-200, 0, 200);
+  if (id === 'cedar_market') origin = new THREE.Vector3(200, 0, -200);
+
   interiorGroup.position.copy(origin);
 
-  const interactiveObjects: ActiveInteriorState['interactiveObjects'] = [];
+  const collisionBoxes: CollisionBox[] = [];
+  const interactiveObjects: InteriorInteractable[] = [];
 
-  // Common materials
-  const matFloorTile = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45 });
-  const matWallWhite = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.85 });
-  const matWood = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.65 });
-  const matSteel = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 });
-  const matGold = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.9, roughness: 0.2 });
-  const matBluePolice = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.5 });
-  const matMarble = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.2, metalness: 0.1 });
-  const matNeonBlue = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-  const matExitDoor = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3 });
+  const addInteriorCollision = (
+    localX: number,
+    localZ: number,
+    width: number,
+    depth: number,
+    height: number,
+    tag: CollisionBox['tag'] = 'building'
+  ) => {
+    const worldX = origin.x + localX;
+    const worldZ = origin.z + localZ;
+    collisionBoxes.push({
+      minX: worldX - width / 2,
+      maxX: worldX + width / 2,
+      minZ: worldZ - depth / 2,
+      maxZ: worldZ + depth / 2,
+      height,
+      tag,
+    });
+  };
 
-  // Standard Room Shell (18m wide, 5.5m high, 16m deep)
-  const roomWidth = 18;
-  const roomDepth = 16;
-  const roomHeight = 5.2;
-
-  // Floor
-  const floorGeom = new THREE.PlaneGeometry(roomWidth, roomDepth);
-  const floor = new THREE.Mesh(floorGeom, id === 'metro_bank' ? matMarble : matFloorTile);
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  interiorGroup.add(floor);
-
-  // Ceiling with recessed LED panels
-  const ceilingGeom = new THREE.PlaneGeometry(roomWidth, roomDepth);
-  const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
-  const ceiling = new THREE.Mesh(ceilingGeom, ceilingMat);
-  ceiling.rotation.x = Math.PI / 2;
-  ceiling.position.y = roomHeight;
-  interiorGroup.add(ceiling);
-
-  // Interior Overhead Ambient Point Lights
-  const light1 = new THREE.PointLight(id === 'soul_kitchen' ? 0xfde047 : 0xffffff, 1.2, 22);
-  light1.position.set(-4, roomHeight - 0.4, 0);
-  interiorGroup.add(light1);
-
-  const light2 = new THREE.PointLight(id === 'precinct_9' ? 0x93c5fd : 0xffffff, 1.2, 22);
-  light2.position.set(4, roomHeight - 0.4, 0);
-  interiorGroup.add(light2);
-
-  // Walls: Back, Left, Right, Front
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, roomHeight, 0.4), matWallWhite);
-  backWall.position.set(0, roomHeight / 2, -roomDepth / 2);
-  interiorGroup.add(backWall);
-
-  const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(7.5, roomHeight, 0.4), matWallWhite);
-  frontWallL.position.set(-5.25, roomHeight / 2, roomDepth / 2);
-  interiorGroup.add(frontWallL);
-
-  const frontWallR = new THREE.Mesh(new THREE.BoxGeometry(7.5, roomHeight, 0.4), matWallWhite);
-  frontWallR.position.set(5.25, roomHeight / 2, roomDepth / 2);
-  interiorGroup.add(frontWallR);
-
-  // Glass entrance doors at center front (Z: roomDepth / 2)
-  const exitDoorGeom = new THREE.BoxGeometry(3.0, 3.2, 0.15);
-  const exitDoor = new THREE.Mesh(exitDoorGeom, matExitDoor);
-  exitDoor.position.set(0, 1.6, roomDepth / 2 - 0.1);
-  interiorGroup.add(exitDoor);
-
-  // Exit Door Sign
-  const exitSign = new THREE.Mesh(
-    new THREE.BoxGeometry(1.6, 0.4, 0.08),
-    new THREE.MeshBasicMaterial({ color: 0x22c55e })
-  );
-  exitSign.position.set(0, 3.5, roomDepth / 2 - 0.15);
-  interiorGroup.add(exitSign);
-
-  // Register Exit Door interaction
-  interactiveObjects.push({
-    type: 'exit_door',
-    position: new THREE.Vector3(0, 0, roomDepth / 2 - 1.2).add(origin),
-    prompt: 'EXIT TO STREET',
-    radius: 2.2,
+  // Shared Architectural Materials
+  const marbleFloorMat = new THREE.MeshStandardMaterial({
+    color: 0xf1f5f9,
+    roughness: 0.22,
+    metalness: 0.12,
   });
+  const darkTileFloorMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.35,
+    metalness: 0.15,
+  });
+  const wallPlasterMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.85,
+  });
+  const wallWoodPanels = new THREE.MeshStandardMaterial({
+    color: 0x451a03,
+    roughness: 0.65,
+  });
+  const brushedSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    metalness: 0.85,
+    roughness: 0.28,
+  });
+  const polishedBrassMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    metalness: 0.9,
+    roughness: 0.22,
+  });
+  const glassPartitionMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    metalness: 0.9,
+    roughness: 0.1,
+    transparent: true,
+    opacity: 0.55,
+  });
+  const neonCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+  const neonGoldMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
+  const neonGreenMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
 
-  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.4, roomHeight, roomDepth), matWallWhite);
-  leftWall.position.set(-roomWidth / 2, roomHeight / 2, 0);
-  interiorGroup.add(leftWall);
+  let animatedVaultDoorData: ActiveInteriorState['animatedVaultDoor'] | undefined;
 
-  const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.4, roomHeight, roomDepth), matWallWhite);
-  rightWall.position.set(roomWidth / 2, roomHeight / 2, 0);
-  interiorGroup.add(rightWall);
+  // ==========================================================================
+  // 1. 1ST NATIONAL METRO BANK INTERIOR
+  // ==========================================================================
+  if (id === 'metro_bank') {
+    const roomWidth = 26;
+    const roomDepth = 24;
+    const roomHeight = 5.6;
 
-  // ==================================================================
-  // 1. PRECINCT 9 INTERIOR (POLICE HQ)
-  // ==================================================================
-  if (id === 'precinct_9') {
-    // Duty Sergeant Reception Counter
-    const deskGeom = new THREE.BoxGeometry(10, 1.2, 1.8);
-    const desk = new THREE.Mesh(deskGeom, matWood);
-    desk.position.set(0, 0.6, -2);
-    interiorGroup.add(desk);
+    // Floor: Checkered polished grand marble tiles
+    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), marbleFloorMat);
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.receiveShadow = true;
+    interiorGroup.add(floorMesh);
 
-    // Front Police Shield Emblem on Desk
-    const shieldEmblem = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.25, 0.06, 7), matGold);
-    shieldEmblem.rotateX(Math.PI / 2);
-    shieldEmblem.position.set(0, 0.7, -1.05);
-    interiorGroup.add(shieldEmblem);
+    // Decorative dark marble border inlay
+    const borderGeom = new THREE.RingGeometry(8, 9.5, 4);
+    const borderMesh = new THREE.Mesh(borderGeom, darkTileFloorMat);
+    borderMesh.rotation.x = -Math.PI / 2;
+    borderMesh.rotation.z = Math.PI / 4;
+    borderMesh.position.y = 0.01;
+    interiorGroup.add(borderMesh);
 
-    // Computer Monitor and Dispatch Terminal
-    const monGeom = new THREE.BoxGeometry(1.2, 0.8, 0.1);
-    const mon = new THREE.Mesh(monGeom, matSteel);
-    mon.position.set(-2, 1.6, -2.1);
-    interiorGroup.add(mon);
-
-    const screenGeom = new THREE.PlaneGeometry(1.1, 0.7);
-    const screen = new THREE.Mesh(screenGeom, matNeonBlue);
-    screen.position.set(-2, 1.6, -2.04);
-    interiorGroup.add(screen);
-
-    // Wanted Fugitives Corkboard on Back Wall
-    const boardGeom = new THREE.BoxGeometry(5.5, 2.8, 0.1);
-    const boardMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 });
-    const board = new THREE.Mesh(boardGeom, boardMat);
-    board.position.set(0, 3.2, -roomDepth / 2 + 0.15);
-    interiorGroup.add(board);
-
-    // EVIDENCE LOCKER (Right Corner)
-    const lockerGeom = new THREE.BoxGeometry(3.6, 3.8, 1.4);
-    const lockerMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.7, roughness: 0.3 });
-    const locker = new THREE.Mesh(lockerGeom, lockerMat);
-    locker.position.set(6.5, 1.9, -5.5);
-    interiorGroup.add(locker);
-
-    // Glowing Evidence Lock Bar
-    const lockBar = new THREE.Mesh(
-      new THREE.BoxGeometry(2.8, 0.3, 0.1),
-      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+    // Ceiling with recessed architectural warm light troffers
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(roomWidth, roomDepth),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 })
     );
-    lockBar.position.set(6.5, 2.1, -4.75);
-    interiorGroup.add(lockBar);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = roomHeight;
+    interiorGroup.add(ceiling);
 
-    // Register Evidence Locker Interaction
+    // Interior Ambient & Point Lights
+    const centralChandelier = new THREE.PointLight(0xfffbeb, 1.8, 30);
+    centralChandelier.position.set(0, roomHeight - 0.5, 0);
+    interiorGroup.add(centralChandelier);
+
+    const vaultAtmosphereLight = new THREE.PointLight(0x38bdf8, 1.5, 18);
+    vaultAtmosphereLight.position.set(0, 3.2, -7.5);
+    interiorGroup.add(vaultAtmosphereLight);
+
+    const managerOfficeLight = new THREE.PointLight(0xfef08a, 1.2, 14);
+    managerOfficeLight.position.set(7.5, 3.2, -4);
+    interiorGroup.add(managerOfficeLight);
+
+    // Perimeter Walls
+    // Back Wall (Z: -roomDepth / 2 = -12)
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, roomHeight, 0.5), wallPlasterMat);
+    backWall.position.set(0, roomHeight / 2, -12);
+    interiorGroup.add(backWall);
+    addInteriorCollision(0, -12, roomWidth, 0.6, roomHeight);
+
+    // Left Wall (X: -13)
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    leftWall.position.set(-13, roomHeight / 2, 0);
+    interiorGroup.add(leftWall);
+    addInteriorCollision(-13, 0, 0.6, roomDepth, roomHeight);
+
+    // Right Wall (X: 13)
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallWoodPanels);
+    rightWall.position.set(13, roomHeight / 2, 0);
+    interiorGroup.add(rightWall);
+    addInteriorCollision(13, 0, 0.6, roomDepth, roomHeight);
+
+    // Front Wall with Entrance / Exit Opening (Z: 12)
+    const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(11.2, roomHeight, 0.5), wallPlasterMat);
+    frontWallL.position.set(-7.4, roomHeight / 2, 12);
+    interiorGroup.add(frontWallL);
+    addInteriorCollision(-7.4, 12, 11.2, 0.6, roomHeight);
+
+    const frontWallR = new THREE.Mesh(new THREE.BoxGeometry(11.2, roomHeight, 0.5), wallPlasterMat);
+    frontWallR.position.set(7.4, roomHeight / 2, 12);
+    interiorGroup.add(frontWallR);
+    addInteriorCollision(7.4, 12, 11.2, 0.6, roomHeight);
+
+    // Exit Glass Double Doors at (X: 0, Z: 11.8)
+    const exitDoorFrame = new THREE.Mesh(new THREE.BoxGeometry(3.6, 3.4, 0.2), brushedSteelMat);
+    exitDoorFrame.position.set(0, 1.7, 11.9);
+    interiorGroup.add(exitDoorFrame);
+
+    const exitDoorGlass = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3.2, 0.1), glassPartitionMat);
+    exitDoorGlass.position.set(0, 1.6, 11.9);
+    interiorGroup.add(exitDoorGlass);
+
+    // Illuminated Exit Sign
+    const exitSignMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.5, 0.15), neonGreenMat);
+    exitSignMesh.position.set(0, 3.65, 11.8);
+    interiorGroup.add(exitSignMesh);
+
+    // Glowing green exit mat on floor
+    const exitFloorMat = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 1.8), neonGreenMat);
+    exitFloorMat.rotation.x = -Math.PI / 2;
+    exitFloorMat.position.set(0, 0.015, 10.6);
+    interiorGroup.add(exitFloorMat);
+
+    // Register Exit Door
     interactiveObjects.push({
-      type: 'evidence_locker',
-      position: new THREE.Vector3(6.5, 0, -4.2).add(origin),
-      prompt: 'ACCESS EVIDENCE LOCKER',
-      radius: 2.5,
+      id: 'bank_exit',
+      type: 'exit_door',
+      name: 'Exit to Financial Plaza',
+      prompt: 'EXIT TO CITY STREET',
+      position: { x: origin.x, y: 0.2, z: origin.z + 11.0 },
+      radius: 2.2,
+      icon: 'door',
     });
 
-    // Seating bench on left
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.6, 0.8), matWood);
-    bench.position.set(-6.5, 0.3, 0);
-    interiorGroup.add(bench);
-  }
+    // ------------------------------------------------------------------------
+    // ZONE A: BANK TELLER SERVICE COUNTERS (Center-Left: X: -4 to 4, Z: 2)
+    // ------------------------------------------------------------------------
+    const tellerCounter = new THREE.Mesh(new THREE.BoxGeometry(11, 1.3, 1.8), wallWoodPanels);
+    tellerCounter.position.set(-2, 0.65, 2.0);
+    interiorGroup.add(tellerCounter);
+    addInteriorCollision(-2, 2.0, 11, 1.8, 1.3);
 
-  // ==================================================================
-  // 2. METRO BANK INTERIOR (COMMERCIAL TRUST & VAULT)
-  // ==================================================================
-  else if (id === 'metro_bank') {
-    // Marble Teller Counter with Brass Grilles
-    const tellerGeom = new THREE.BoxGeometry(12, 1.3, 1.6);
-    const tellerDesk = new THREE.Mesh(tellerGeom, matMarble);
-    tellerDesk.position.set(0, 0.65, -3);
-    interiorGroup.add(tellerDesk);
+    // Bulletproof Glass Partitions and Brass Transaction Windows
+    for (let tx = -6; tx <= 2; tx += 2.8) {
+      const tellerGlass = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.5, 0.08), glassPartitionMat);
+      tellerGlass.position.set(tx, 2.05, 2.0);
+      interiorGroup.add(tellerGlass);
 
-    // Brass security teller partition
-    for (let tx = -4.5; tx <= 4.5; tx += 3) {
-      const glassDivider = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 0.08), matSteel);
-      glassDivider.position.set(tx, 1.9, -3);
-      interiorGroup.add(glassDivider);
-
-      const tellerSign = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 0.25, 0.05),
-        new THREE.MeshBasicMaterial({ color: 0x10b981 })
-      );
-      tellerSign.position.set(tx, 2.7, -2.95);
+      const tellerSign = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.25, 0.05), neonCyanMat);
+      tellerSign.position.set(tx, 2.9, 1.95);
       interiorGroup.add(tellerSign);
     }
 
-    // Register Bank Teller Interaction
+    // Interactive Teller Cash Drawer Register at (X: -2, Z: 2.8)
+    const tellerRegisterMesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.7), brushedSteelMat);
+    tellerRegisterMesh.position.set(-2, 1.5, 2.0);
+    interiorGroup.add(tellerRegisterMesh);
+
+    // Beacon ring on customer side of teller counter
+    const tellerRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 24), neonCyanMat);
+    tellerRing.rotation.x = -Math.PI / 2;
+    tellerRing.position.set(-2, 0.02, 3.4);
+    interiorGroup.add(tellerRing);
+
     interactiveObjects.push({
+      id: 'bank_teller_drawer',
       type: 'bank_teller',
-      position: new THREE.Vector3(0, 0, -1.8).add(origin),
-      prompt: 'APPROACH BANK TELLER',
-      radius: 2.6,
+      name: 'Teller Counter & Cash Register',
+      prompt: 'CHECK TELLER REGISTER',
+      position: { x: origin.x - 2, y: 0.5, z: origin.z + 3.4 },
+      radius: 2.4,
+      icon: 'dollar',
     });
 
-    // Circular Heavy Steel Vault Door on Back Wall
-    const vaultGeom = new THREE.CylinderGeometry(2.2, 2.2, 0.6, 24);
-    vaultGeom.rotateX(Math.PI / 2);
-    const vaultDoor = new THREE.Mesh(vaultGeom, matSteel);
-    vaultDoor.position.set(0, 2.4, -roomDepth / 2 + 0.35);
-    interiorGroup.add(vaultDoor);
+    // ------------------------------------------------------------------------
+    // ZONE B: BRANCH MANAGER'S EXECUTIVE OFFICE (Right: X: 5 to 12, Z: -8 to 0)
+    // ------------------------------------------------------------------------
+    // Glass Partition dividing office
+    const officeGlassWall = new THREE.Mesh(new THREE.BoxGeometry(0.15, roomHeight, 8), glassPartitionMat);
+    officeGlassWall.position.set(5.0, roomHeight / 2, -4);
+    interiorGroup.add(officeGlassWall);
+    addInteriorCollision(5.0, -4, 0.3, 8, roomHeight);
 
-    const wheelGeom = new THREE.TorusGeometry(0.7, 0.08, 8, 20);
-    const vaultWheel = new THREE.Mesh(wheelGeom, matGold);
-    vaultWheel.position.set(0, 2.4, -roomDepth / 2 + 0.7);
-    interiorGroup.add(vaultWheel);
+    // Executive Mahogany Desk
+    const mgrDesk = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.1, 2.0), wallWoodPanels);
+    mgrDesk.position.set(8.5, 0.55, -4);
+    interiorGroup.add(mgrDesk);
+    addInteriorCollision(8.5, -4, 3.6, 2.0, 1.1);
 
-    // Velvet Stanchion ropes
-    [-3.5, 3.5].forEach((sx) => {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.1, 8), matGold);
-      post.position.set(sx, 0.55, 1);
-      interiorGroup.add(post);
-    });
+    // Executive Leather Chair
+    const mgrChair = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.4, 1.0), darkTileFloorMat);
+    mgrChair.position.set(8.5, 0.7, -5.5);
+    interiorGroup.add(mgrChair);
 
-    const rope = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 7.0, 8),
-      new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.8 })
+    // Banker's Desk Lamp with Emerald Glow
+    const bankerLamp = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.4, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0x16a34a, emissive: 0x15803d, emissiveIntensity: 0.8 })
     );
-    rope.rotateZ(Math.PI / 2);
-    rope.position.set(0, 0.95, 1);
-    interiorGroup.add(rope);
-  }
+    bankerLamp.position.set(9.5, 1.3, -4);
+    interiorGroup.add(bankerLamp);
 
-  // ==================================================================
-  // 3. MAMA LEAH'S SOUL KITCHEN (DINER & COMMUNITY HUB)
-  // ==================================================================
-  else if (id === 'soul_kitchen') {
-    // Red lunch counter with stools
-    const counter = new THREE.Mesh(new THREE.BoxGeometry(10, 1.1, 1.4), matWood);
-    counter.position.set(-1, 0.55, -3);
-    interiorGroup.add(counter);
+    // MANAGER'S EXECUTIVE WALL SAFE on East Wall (X: 12.6, Z: -4)
+    const wallSafeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.8, 1.8), brushedSteelMat);
+    wallSafeMesh.position.set(12.6, 1.8, -4);
+    interiorGroup.add(wallSafeMesh);
 
-    for (let sx = -4.5; sx <= 2.5; sx += 1.8) {
-      const stool = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.65, 10), matSteel);
-      stool.position.set(sx, 0.32, -1.8);
-      interiorGroup.add(stool);
+    const safeDial = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.15, 16), polishedBrassMat);
+    safeDial.rotation.z = Math.PI / 2;
+    safeDial.position.set(12.25, 1.8, -4);
+    interiorGroup.add(safeDial);
+
+    const safeRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 24), neonGoldMat);
+    safeRing.rotation.x = -Math.PI / 2;
+    safeRing.position.set(11.2, 0.02, -4);
+    interiorGroup.add(safeRing);
+
+    interactiveObjects.push({
+      id: 'manager_safe',
+      type: 'manager_safe',
+      name: "Manager's Executive Wall Safe",
+      prompt: "INSPECT MANAGER'S SAFE",
+      position: { x: origin.x + 11.2, y: 0.5, z: origin.z - 4 },
+      radius: 2.5,
+      icon: 'safe',
+    });
+
+    // ------------------------------------------------------------------------
+    // ZONE C: HIGH-SECURITY MASTER VAULT CHAMBER (Back Center: X: -4 to 4, Z: -11 to -5)
+    // ------------------------------------------------------------------------
+    // Concrete Vault Dividing Wall (Z: -5.5) with Vault Portal Opening
+    const vaultWallL = new THREE.Mesh(new THREE.BoxGeometry(8, roomHeight, 0.6), brushedSteelMat);
+    vaultWallL.position.set(-8, roomHeight / 2, -5.5);
+    interiorGroup.add(vaultWallL);
+    addInteriorCollision(-8, -5.5, 8, 0.6, roomHeight);
+
+    const vaultWallR = new THREE.Mesh(new THREE.BoxGeometry(3, roomHeight, 0.6), brushedSteelMat);
+    vaultWallR.position.set(3.5, roomHeight / 2, -5.5);
+    interiorGroup.add(vaultWallR);
+    addInteriorCollision(3.5, -5.5, 3, 0.6, roomHeight);
+
+    // Vault Circular Portal Archway Frame at (X: -0.5, Z: -5.5)
+    const archwayFrame = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.35, 12, 32), brushedSteelMat);
+    archwayFrame.position.set(-0.5, 2.4, -5.5);
+    interiorGroup.add(archwayFrame);
+
+    // REINFORCED HEAVY CIRCULAR VAULT DOOR (Animated Pivot Group)
+    const vaultDoorGroup = new THREE.Group();
+    // Pivot hinge at left edge of archway: X = -2.6, Z = -5.5
+    vaultDoorGroup.position.set(-2.6, 2.4, -5.5);
+
+    const vaultDoorCylinder = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 0.55, 32), brushedSteelMat);
+    vaultDoorCylinder.rotation.x = Math.PI / 2;
+    // Offset relative to hinge pivot
+    vaultDoorCylinder.position.set(2.1, 0, 0);
+    vaultDoorGroup.add(vaultDoorCylinder);
+
+    // Chrome Locking Spoke Wheel on front of vault door
+    const vaultWheel = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.12, 10, 24), polishedBrassMat);
+    vaultWheel.position.set(2.1, 0, 0.35);
+    vaultDoorGroup.add(vaultWheel);
+
+    for (let sp = 0; sp < 4; sp++) {
+      const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.8, 8), polishedBrassMat);
+      spoke.rotation.z = (sp * Math.PI) / 4;
+      spoke.position.set(2.1, 0, 0.35);
+      vaultDoorGroup.add(spoke);
     }
 
-    // Register Kitchen Counter Interaction
+    interiorGroup.add(vaultDoorGroup);
+
+    // Store animated vault door data (starts closed at angle 0; opens to -Math.PI / 2)
+    animatedVaultDoorData = {
+      doorMesh: vaultDoorGroup,
+      wheelMesh: vaultWheel,
+      isOpen: false,
+      currentAngle: 0,
+      targetAngle: 0,
+    };
+
+    // Vault Door Operating Console
+    const vaultDoorRing = new THREE.Mesh(new THREE.RingGeometry(0.65, 0.9, 24), neonCyanMat);
+    vaultDoorRing.rotation.x = -Math.PI / 2;
+    vaultDoorRing.position.set(-0.5, 0.02, -4.2);
+    interiorGroup.add(vaultDoorRing);
+
     interactiveObjects.push({
-      type: 'store_counter',
-      position: new THREE.Vector3(-1, 0, -1.6).add(origin),
-      prompt: "SPEAK WITH MAMA LEAH",
-      radius: 2.5,
+      id: 'vault_door',
+      type: 'vault_door',
+      name: 'Reinforced Vault Blast Door',
+      prompt: 'OPERATE MASTER VAULT DOOR',
+      position: { x: origin.x - 0.5, y: 0.5, z: origin.z - 4.2 },
+      radius: 2.8,
+      icon: 'lock',
     });
 
-    // Jukebox in corner
-    const jukeGeom = new THREE.BoxGeometry(1.6, 2.6, 1.2);
-    const juke = new THREE.Mesh(
-      jukeGeom,
-      new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.3, emissive: 0xb45309, emissiveIntensity: 0.4 })
-    );
-    juke.position.set(6.5, 1.3, -5.5);
-    interiorGroup.add(juke);
+    // INSIDE THE VAULT CHAMBER:
+    // Left & Back Walls lined with Safety Deposit Boxes
+    const sdbGridGeom = new THREE.BoxGeometry(4.5, 3.4, 0.8);
+    const sdbGridMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.9, roughness: 0.15 });
+    const sdbGrid = new THREE.Mesh(sdbGridGeom, sdbGridMat);
+    sdbGrid.position.set(-6, 1.7, -9.5);
+    interiorGroup.add(sdbGrid);
+    addInteriorCollision(-6, -9.5, 4.5, 0.8, 3.4);
 
-    // Dining tables on right
-    [1.5, -2.5].forEach((tz) => {
-      const table = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.8, 12), matWood);
-      table.position.set(5.5, 0.4, tz);
-      interiorGroup.add(table);
+    // Heavy Central Steel Table holding 24K Gold Bullion Bars & Cash Bricks
+    const bullionTable = new THREE.Mesh(new THREE.BoxGeometry(4.0, 1.0, 2.2), brushedSteelMat);
+    bullionTable.position.set(-1.0, 0.5, -9.5);
+    interiorGroup.add(bullionTable);
+    addInteriorCollision(-1.0, -9.5, 4.0, 2.2, 1.0);
+
+    // 24K Gold Bullion Stacks on Table
+    for (let gx = -1.2; gx <= 1.2; gx += 0.8) {
+      for (let gz = -0.4; gz <= 0.4; gz += 0.5) {
+        const goldBar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.22, 0.32),
+          new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.95, roughness: 0.15 })
+        );
+        goldBar.position.set(-1.0 + gx, 1.12, -9.5 + gz);
+        interiorGroup.add(goldBar);
+      }
+    }
+
+    // Glowing Gold beacon ring inside vault
+    const goldBeaconRing = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.95, 24), neonGoldMat);
+    goldBeaconRing.rotation.x = -Math.PI / 2;
+    goldBeaconRing.position.set(-1.0, 0.02, -8.0);
+    interiorGroup.add(goldBeaconRing);
+
+    interactiveObjects.push({
+      id: 'vault_gold_bullion',
+      type: 'vault_gold',
+      name: 'Master Vault Gold Bullion & Reserve Cash',
+      prompt: 'INSPECT VAULT VALUABLES',
+      position: { x: origin.x - 1.0, y: 0.5, z: origin.z - 8.0 },
+      radius: 2.6,
+      icon: 'gold',
+    });
+
+    // ------------------------------------------------------------------------
+    // ZONE D: CCTV SURVEILLANCE & SECURITY CONSOLE (West Wall: X: -12.4, Z: -3)
+    // ------------------------------------------------------------------------
+    const cctvRack = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.8, 3.0), brushedSteelMat);
+    cctvRack.position.set(-12.4, 1.4, -3);
+    interiorGroup.add(cctvRack);
+    addInteriorCollision(-12.4, -3, 0.8, 3.0, 2.8);
+
+    // Multi-Monitor Displays
+    for (let my = -0.6; my <= 0.6; my += 0.6) {
+      const monMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.65, 0.45), neonCyanMat);
+      monMesh.rotation.y = Math.PI / 2;
+      monMesh.position.set(-11.95, 1.8 + my, -3);
+      interiorGroup.add(monMesh);
+    }
+
+    const cctvRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 24), neonCyanMat);
+    cctvRing.rotation.x = -Math.PI / 2;
+    cctvRing.position.set(-11.0, 0.02, -3);
+    interiorGroup.add(cctvRing);
+
+    interactiveObjects.push({
+      id: 'bank_cctv',
+      type: 'cctv_console',
+      name: 'Bank CCTV Surveillance Terminal',
+      prompt: 'ACCESS CCTV CONSOLE',
+      position: { x: origin.x - 11.0, y: 0.5, z: origin.z - 3 },
+      radius: 2.4,
+      icon: 'camera',
+    });
+
+    // ------------------------------------------------------------------------
+    // ZONE E: ATM BANKING TERMINAL (Near Entrance: X: -8.5, Z: 8.5)
+    // ------------------------------------------------------------------------
+    const atmKiosk = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 1.2), darkTileFloorMat);
+    atmKiosk.position.set(-8.5, 1.2, 8.5);
+    interiorGroup.add(atmKiosk);
+    addInteriorCollision(-8.5, 8.5, 1.4, 1.2, 2.4);
+
+    const atmScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.6), neonCyanMat);
+    atmScreen.rotation.y = Math.PI;
+    atmScreen.position.set(-8.5, 1.5, 7.89);
+    interiorGroup.add(atmScreen);
+
+    const atmRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.85, 24), neonCyanMat);
+    atmRing.rotation.x = -Math.PI / 2;
+    atmRing.position.set(-8.5, 0.02, 7.0);
+    interiorGroup.add(atmRing);
+
+    interactiveObjects.push({
+      id: 'bank_atm_terminal',
+      type: 'atm_terminal',
+      name: 'Metro Trust Banking & Vault Terminal',
+      prompt: 'OPEN BANKING & SAVINGS TERMINAL',
+      position: { x: origin.x - 8.5, y: 0.5, z: origin.z + 7.0 },
+      radius: 2.5,
+      icon: 'atm',
+    });
+
+    // Velvet Stanchion Ropes in queue area
+    [-4, 0, 4].forEach((px) => {
+      const stanchion = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.1, 12), polishedBrassMat);
+      stanchion.position.set(px, 0.55, 6.5);
+      interiorGroup.add(stanchion);
     });
   }
 
-  // ==================================================================
-  // 4. CEDAR HEIGHTS CONVENIENCE / DELI (SHOP)
-  // ==================================================================
-  else if (id === 'cedar_market') {
-    // Checkout Counter with Cash Register
-    const counter = new THREE.Mesh(new THREE.BoxGeometry(6, 1.1, 1.4), matWood);
-    counter.position.set(-3.5, 0.55, -2);
-    interiorGroup.add(counter);
+  // ==========================================================================
+  // 2. PRECINCT 9 POLICE STATION INTERIOR
+  // ==========================================================================
+  else if (id === 'precinct_9') {
+    const roomWidth = 24;
+    const roomDepth = 20;
+    const roomHeight = 5.2;
 
-    const reg = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.6), matSteel);
-    reg.position.set(-3.5, 1.35, -2);
-    interiorGroup.add(reg);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), darkTileFloorMat);
+    floor.rotation.x = -Math.PI / 2;
+    interiorGroup.add(floor);
 
-    // Register Shopkeeper Interaction
+    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), wallPlasterMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = roomHeight;
+    interiorGroup.add(ceiling);
+
+    const light = new THREE.PointLight(0x93c5fd, 1.5, 25);
+    light.position.set(0, roomHeight - 0.4, 0);
+    interiorGroup.add(light);
+
+    // Walls
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, roomHeight, 0.5), wallPlasterMat);
+    backWall.position.set(0, roomHeight / 2, -10);
+    interiorGroup.add(backWall);
+    addInteriorCollision(0, -10, roomWidth, 0.6, roomHeight);
+
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    leftWall.position.set(-12, roomHeight / 2, 0);
+    interiorGroup.add(leftWall);
+    addInteriorCollision(-12, 0, 0.6, roomDepth, roomHeight);
+
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    rightWall.position.set(12, roomHeight / 2, 0);
+    interiorGroup.add(rightWall);
+    addInteriorCollision(12, 0, 0.6, roomDepth, roomHeight);
+
+    const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(10, roomHeight, 0.5), wallPlasterMat);
+    frontWallL.position.set(-6.5, roomHeight / 2, 10);
+    interiorGroup.add(frontWallL);
+    addInteriorCollision(-6.5, 10, 10, 0.6, roomHeight);
+
+    const frontWallR = new THREE.Mesh(new THREE.BoxGeometry(10, roomHeight, 0.5), wallPlasterMat);
+    frontWallR.position.set(6.5, roomHeight / 2, 10);
+    interiorGroup.add(frontWallR);
+    addInteriorCollision(6.5, 10, 10, 0.6, roomHeight);
+
+    // Exit Door
     interactiveObjects.push({
-      type: 'store_counter',
-      position: new THREE.Vector3(-3.5, 0, -0.8).add(origin),
-      prompt: 'BROWSE STORE SUPPLIES',
-      radius: 2.5,
+      id: 'precinct_exit',
+      type: 'exit_door',
+      name: 'Exit to Police Plaza',
+      prompt: 'EXIT TO CITY STREET',
+      position: { x: origin.x, y: 0.2, z: origin.z + 8.8 },
+      radius: 2.6,
+      icon: 'door',
     });
 
-    // Merchandise Aisle Shelves
-    [2.5, 6.0].forEach((ax) => {
-      const aisle = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.6, 8.0), matSteel);
-      aisle.position.set(ax, 1.3, -2);
-      interiorGroup.add(aisle);
+    // Duty Sergeant Reception Desk
+    const desk = new THREE.Mesh(new THREE.BoxGeometry(9, 1.2, 1.8), wallWoodPanels);
+    desk.position.set(0, 0.6, 1);
+    interiorGroup.add(desk);
+    addInteriorCollision(0, 1, 9, 1.8, 1.2);
+
+    interactiveObjects.push({
+      id: 'duty_desk',
+      type: 'duty_desk',
+      name: 'Duty Sergeant Reception Desk',
+      prompt: 'CHECK PRECINCT BRIEFING LOG',
+      position: { x: origin.x, y: 0.5, z: origin.z + 2.5 },
+      radius: 2.4,
+      icon: 'shield',
     });
 
-    // Beverage Cooler against back wall
-    const cooler = new THREE.Mesh(
-      new THREE.BoxGeometry(5.0, 3.2, 0.8),
-      new THREE.MeshStandardMaterial({ color: 0x0284c7, emissive: 0x0369a1, emissiveIntensity: 0.3 })
+    // Evidence Locker (Right Corner: X: 8.5, Z: -6)
+    const locker = new THREE.Mesh(
+      new THREE.BoxGeometry(3.6, 3.8, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.7, roughness: 0.3 })
     );
-    cooler.position.set(4, 1.6, -roomDepth / 2 + 0.5);
-    interiorGroup.add(cooler);
+    locker.position.set(8.5, 1.9, -6);
+    interiorGroup.add(locker);
+    addInteriorCollision(8.5, -6, 3.6, 1.4, 3.8);
+
+    interactiveObjects.push({
+      id: 'evidence_locker',
+      type: 'evidence_locker',
+      name: 'Precinct 9 Evidence Locker',
+      prompt: 'ACCESS EVIDENCE LOCKER',
+      position: { x: origin.x + 8.5, y: 0.5, z: origin.z - 4.5 },
+      radius: 2.5,
+      icon: 'lock',
+    });
+
+    // Tactical Armory Depot (Left Corner: X: -8.5, Z: -6)
+    const armory = new THREE.Mesh(new THREE.BoxGeometry(3.8, 3.4, 1.4), brushedSteelMat);
+    armory.position.set(-8.5, 1.7, -6);
+    interiorGroup.add(armory);
+    addInteriorCollision(-8.5, -6, 3.8, 1.4, 3.4);
+
+    interactiveObjects.push({
+      id: 'police_armory',
+      type: 'police_armory',
+      name: 'Tactical Armory Depot',
+      prompt: 'RESTOCK SERVICE AMMUNITION',
+      position: { x: origin.x - 8.5, y: 0.5, z: origin.z - 4.5 },
+      radius: 2.5,
+      icon: 'ammo',
+    });
   }
 
-  // ==================================================================
-  // 5. MARCUS'S PRECISION AUTO (WORKSHOP)
-  // ==================================================================
+  // ==========================================================================
+  // 3. EASTSIDE BODEGA & 24/7 MARKET INTERIOR
+  // ==========================================================================
   else {
-    // Workshop Hydraulic Lift
-    const liftGeom = new THREE.BoxGeometry(3.6, 0.15, 6.0);
-    const lift = new THREE.Mesh(liftGeom, matSteel);
-    lift.position.set(-2, 0.08, -2);
-    interiorGroup.add(lift);
+    const roomWidth = 18;
+    const roomDepth = 16;
+    const roomHeight = 5.0;
 
-    // Project Car on Lift
-    const carBody = new THREE.Mesh(
-      new THREE.BoxGeometry(2.0, 0.6, 4.2),
-      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4 })
-    );
-    carBody.position.set(-2, 1.2, -2);
-    interiorGroup.add(carBody);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), darkTileFloorMat);
+    floor.rotation.x = -Math.PI / 2;
+    interiorGroup.add(floor);
 
-    // Tool Bench along back wall
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(8, 1.2, 1.4), matSteel);
-    bench.position.set(2, 0.6, -roomDepth / 2 + 0.8);
-    interiorGroup.add(bench);
+    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), wallPlasterMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = roomHeight;
+    interiorGroup.add(ceiling);
 
-    // Red Tool Chest
-    const chest = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 1.8, 0.9),
-      new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4 })
-    );
-    chest.position.set(5.5, 0.9, -roomDepth / 2 + 0.8);
-    interiorGroup.add(chest);
+    const light = new THREE.PointLight(0xfef08a, 1.5, 20);
+    light.position.set(0, roomHeight - 0.4, 0);
+    interiorGroup.add(light);
 
-    // Register Workshop Interaction
+    // Walls
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, roomHeight, 0.5), wallPlasterMat);
+    backWall.position.set(0, roomHeight / 2, -8);
+    interiorGroup.add(backWall);
+    addInteriorCollision(0, -8, roomWidth, 0.6, roomHeight);
+
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    leftWall.position.set(-9, roomHeight / 2, 0);
+    interiorGroup.add(leftWall);
+    addInteriorCollision(-9, 0, 0.6, roomDepth, roomHeight);
+
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    rightWall.position.set(9, roomHeight / 2, 0);
+    interiorGroup.add(rightWall);
+    addInteriorCollision(9, 0, 0.6, roomDepth, roomHeight);
+
+    const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(7, roomHeight, 0.5), wallPlasterMat);
+    frontWallL.position.set(-5, roomHeight / 2, 8);
+    interiorGroup.add(frontWallL);
+    addInteriorCollision(-5, 8, 7, 0.6, roomHeight);
+
+    const frontWallR = new THREE.Mesh(new THREE.BoxGeometry(7, roomHeight, 0.5), wallPlasterMat);
+    frontWallR.position.set(5, roomHeight / 2, 8);
+    interiorGroup.add(frontWallR);
+    addInteriorCollision(5, 8, 7, 0.6, roomHeight);
+
+    // Exit Door
     interactiveObjects.push({
+      id: 'market_exit',
+      type: 'exit_door',
+      name: 'Exit to Bodega Sidewalk',
+      prompt: 'EXIT TO CITY STREET',
+      position: { x: origin.x, y: 0.2, z: origin.z + 6.8 },
+      radius: 2.6,
+      icon: 'door',
+    });
+
+    // Checkout Counter
+    const counter = new THREE.Mesh(new THREE.BoxGeometry(5.5, 1.1, 1.5), wallWoodPanels);
+    counter.position.set(-3.5, 0.55, 1);
+    interiorGroup.add(counter);
+    addInteriorCollision(-3.5, 1, 5.5, 1.5, 1.1);
+
+    interactiveObjects.push({
+      id: 'market_counter',
       type: 'store_counter',
-      position: new THREE.Vector3(2, 0, -roomDepth / 2 + 2.2).add(origin),
-      prompt: 'TALK WITH MARCUS',
-      radius: 2.5,
+      name: 'Market Register & Clerk Counter',
+      prompt: 'BROWSE FIELD PROVISIONS',
+      position: { x: origin.x - 3.5, y: 0.5, z: origin.z + 2.4 },
+      radius: 2.4,
+      icon: 'shop',
+    });
+
+    // Backroom Safe (Contraband stash)
+    const backSafe = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.0, 1.4), brushedSteelMat);
+    backSafe.position.set(6.5, 1.0, -6.5);
+    interiorGroup.add(backSafe);
+    addInteriorCollision(6.5, -6.5, 1.6, 1.4, 2.0);
+
+    interactiveObjects.push({
+      id: 'market_backroom_safe',
+      type: 'backroom_safe',
+      name: 'Bodega Backroom Delivery Safe',
+      prompt: 'INSPECT BACKROOM STASH',
+      position: { x: origin.x + 6.5, y: 0.5, z: origin.z - 5.2 },
+      radius: 2.4,
+      icon: 'safe',
     });
   }
+
+  // Spawn position inside building: facing inwards into the room safely in front of exit
+  const interiorSpawnPos = {
+    x: origin.x,
+    y: 0.0,
+    z: id === 'metro_bank' ? origin.z + 7.2 : id === 'precinct_9' ? origin.z + 5.5 : origin.z + 4.0,
+  };
 
   return {
     building,
     exteriorPosition: building.exteriorPos,
-    exteriorYaw: 0,
+    exteriorYaw: Math.PI,
     interiorGroup,
+    interiorSpawnPos,
+    interiorSpawnYaw: 0,
+    collisionBoxes,
     interactiveObjects,
+    animatedVaultDoor: animatedVaultDoorData,
   };
 }

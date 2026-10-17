@@ -16,6 +16,9 @@ import {
   Shield,
   LogOut,
   Zap,
+  Scale,
+  Home,
+  Heart,
 } from 'lucide-react';
 import { InputState } from '../types/game';
 
@@ -34,6 +37,17 @@ interface TouchControlsProps {
   onToggleCamera?: () => void;
   onToggleFlashlight?: () => void;
   onCallBackup?: () => void;
+  canMakeEventChoice?: boolean;
+  onOpenEventChoice?: () => void;
+  canEnterBuilding?: boolean;
+  onEnterBuilding?: () => void;
+  canExitBuilding?: boolean;
+  onExitBuilding?: () => void;
+  interiorInteractLabel?: string;
+  onInteriorInteract?: () => void;
+  onExitVehicle?: () => void;
+  canRescueHostage?: boolean;
+  onRescueHostage?: () => void;
 }
 
 export const TouchControls: React.FC<TouchControlsProps> = ({
@@ -51,6 +65,17 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   onToggleCamera,
   onToggleFlashlight,
   onCallBackup,
+  canMakeEventChoice = false,
+  onOpenEventChoice,
+  canEnterBuilding = false,
+  onEnterBuilding,
+  canExitBuilding = false,
+  onExitBuilding,
+  interiorInteractLabel,
+  onInteriorInteract,
+  onExitVehicle,
+  canRescueHostage = false,
+  onRescueHostage,
 }) => {
   const joystickBaseRef = useRef<HTMLDivElement>(null);
   const [joystickPos, setJoystickPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -91,8 +116,10 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     isPointerDownRef.current = false;
     setIsJoystickActive(false);
     setJoystickPos({ x: 0, y: 0 });
-    inputState.current.moveForward = 0;
     inputState.current.moveRight = 0;
+    if (!isInVehicle) {
+      inputState.current.moveForward = 0;
+    }
   };
 
   const updateJoystick = (clientX: number, clientY: number) => {
@@ -116,13 +143,21 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
     // IMPORTANT: Keep the current joystick direction exactly as it is because movement is correct!
     inputState.current.moveRight = posX / maxRadius;
-    inputState.current.moveForward = -posY / maxRadius;
+    if (!isInVehicle) {
+      inputState.current.moveForward = -posY / maxRadius;
+    } else {
+      // While in vehicle: steering is on X. Only override forward/backward if joystick intentionally pushed up/down
+      const verticalVal = -posY / maxRadius;
+      if (Math.abs(verticalVal) > 0.35) {
+        inputState.current.moveForward = verticalVal;
+      }
+    }
   };
 
-  // Right-screen camera look drag zone (upper/center right area)
+  // Right-screen camera look drag zone
   const handleLookStart = (e: React.TouchEvent) => {
     const touch = e.changedTouches[0];
-    if (touch.clientX > window.innerWidth * 0.4) {
+    if (touch.clientX > window.innerWidth * 0.35) {
       lookTouchIdRef.current = touch.identifier;
       lookLastPosRef.current = { x: touch.clientX, y: touch.clientY };
     }
@@ -154,22 +189,42 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   };
 
   // Contextual interact status
-  const hasContextualInteract = canArrest || canInterrogate || canQuestionCivilian || canEnterVehicle;
-  const interactLabel = canArrest
+  const hasContextualInteract =
+    canRescueHostage ||
+    canExitBuilding ||
+    canEnterBuilding ||
+    !!interiorInteractLabel ||
+    canArrest ||
+    canInterrogate ||
+    canQuestionCivilian ||
+    canEnterVehicle ||
+    canMakeEventChoice;
+
+  const interactLabel = canRescueHostage
+    ? 'RESCUE'
+    : canExitBuilding
+    ? 'EXIT TO STREET'
+    : canEnterBuilding
+    ? 'ENTER BUILDING'
+    : interiorInteractLabel
+    ? interiorInteractLabel
+    : canArrest
     ? 'CUFF'
     : canInterrogate
     ? 'FRISK'
     : canQuestionCivilian
     ? 'TALK'
     : canEnterVehicle
-    ? 'ENTER'
+    ? 'ENTER VEHICLE'
+    : canMakeEventChoice
+    ? 'DECIDE'
     : 'INTERACT';
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none overflow-hidden touch-none font-['Inter',sans-serif]">
-      {/* Upper/Mid Right Swipe Zone for 360 Camera Rotation - carefully bounded to never block top HUD or combat buttons */}
+      {/* Full Right-Side Swipe Zone for Smooth 360 Camera Rotation (buttons on top stop propagation) */}
       <div
-        className="absolute top-[110px] bottom-60 left-[35%] right-[215px] pointer-events-auto z-0"
+        className="absolute top-0 bottom-0 left-[36%] right-0 pointer-events-auto z-0"
         onTouchStart={handleLookStart}
         onTouchMove={handleLookMove}
         onTouchEnd={handleLookEnd}
@@ -295,7 +350,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onPointerUp={(e) => {
                 e.stopPropagation();
-                inputState.current.fire = false;
+                setTimeout(() => {
+                  inputState.current.fire = false;
+                }, 60);
               }}
               onTouchStart={(e) => {
                 e.stopPropagation();
@@ -303,7 +360,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onTouchEnd={(e) => {
                 e.stopPropagation();
-                inputState.current.fire = false;
+                setTimeout(() => {
+                  inputState.current.fire = false;
+                }, 60);
               }}
               className="absolute bottom-4 right-4 sm:bottom-6 sm:right-6 w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-gradient-to-br from-red-600/85 via-red-700/80 to-slate-950/90 hover:from-red-500/90 hover:to-red-700/90 border-2 border-red-400 text-white flex items-center justify-center shadow-[0_0_24px_rgba(239,68,68,0.6)] backdrop-blur-sm active:scale-95 transition-transform pointer-events-auto"
               title="Fire Weapon"
@@ -441,8 +500,19 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
             {/* POLICE BACKUP COMMAND BUTTON (Right Thumb Combat Quick-Call) */}
             {onCallBackup && (
               <button
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  inputState.current.callBackup = true;
+                  onCallBackup();
+                }}
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  inputState.current.callBackup = true;
+                  onCallBackup();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+                  inputState.current.callBackup = true;
                   onCallBackup();
                 }}
                 className="absolute bottom-36 right-38 sm:bottom-40 sm:right-43 w-12 h-12 sm:w-13 sm:h-13 rounded-2xl bg-gradient-to-br from-blue-700/80 to-indigo-950/90 border-2 border-blue-400 text-white flex flex-col items-center justify-center shadow-[0_0_16px_rgba(59,130,246,0.5)] backdrop-blur-sm active:scale-90 pointer-events-auto transition-transform"
@@ -460,39 +530,77 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <button
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  if (canArrest) {
+                  if (canRescueHostage && onRescueHostage) {
+                    onRescueHostage();
+                  } else if (canExitBuilding && onExitBuilding) {
+                    onExitBuilding();
+                  } else if (canEnterBuilding && onEnterBuilding) {
+                    onEnterBuilding();
+                  } else if (interiorInteractLabel && onInteriorInteract) {
+                    onInteriorInteract();
+                  } else if (canArrest) {
                     inputState.current.interact = true;
                   } else if (canInterrogate && onOpenInterrogation) {
                     onOpenInterrogation();
-                  } else if (canQuestionCivilian && onQuestionCivilian) {
-                    onQuestionCivilian();
                   } else if (canEnterVehicle) {
                     inputState.current.enterVehicle = true;
+                  } else if (canQuestionCivilian && onQuestionCivilian) {
+                    onQuestionCivilian();
+                  } else if (canMakeEventChoice && onOpenEventChoice) {
+                    onOpenEventChoice();
                   }
                 }}
                 onTouchStart={(e) => {
                   e.stopPropagation();
-                  if (canArrest) {
+                  if (canRescueHostage && onRescueHostage) {
+                    onRescueHostage();
+                  } else if (canExitBuilding && onExitBuilding) {
+                    onExitBuilding();
+                  } else if (canEnterBuilding && onEnterBuilding) {
+                    onEnterBuilding();
+                  } else if (interiorInteractLabel && onInteriorInteract) {
+                    onInteriorInteract();
+                  } else if (canArrest) {
                     inputState.current.interact = true;
                   } else if (canInterrogate && onOpenInterrogation) {
                     onOpenInterrogation();
-                  } else if (canQuestionCivilian && onQuestionCivilian) {
-                    onQuestionCivilian();
                   } else if (canEnterVehicle) {
                     inputState.current.enterVehicle = true;
+                  } else if (canQuestionCivilian && onQuestionCivilian) {
+                    onQuestionCivilian();
+                  } else if (canMakeEventChoice && onOpenEventChoice) {
+                    onOpenEventChoice();
                   }
                 }}
-                className="absolute bottom-20 right-38 sm:bottom-24 sm:right-43 w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-emerald-600/90 to-blue-600/90 border-2 border-emerald-400 text-white flex flex-col items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.7)] backdrop-blur-sm active:scale-95 transition-transform pointer-events-auto animate-pulse"
+                className={`absolute bottom-20 right-38 sm:bottom-24 sm:right-43 ${
+                  canEnterVehicle || canEnterBuilding || canExitBuilding
+                    ? 'w-24 sm:w-28 h-13 sm:h-14 rounded-2xl px-1'
+                    : 'w-13 h-13 sm:w-14 sm:h-14 rounded-full'
+                } bg-gradient-to-br ${
+                  canRescueHostage
+                    ? 'from-emerald-500 to-green-600 border-emerald-300 shadow-[0_0_25px_rgba(16,185,129,0.9)]'
+                    : canExitBuilding
+                    ? 'from-amber-600/90 to-red-600/90 border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.7)]'
+                    : 'from-emerald-600/90 to-blue-600/90 border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.7)]'
+                } border-2 text-white flex flex-col items-center justify-center backdrop-blur-sm active:scale-95 transition-transform pointer-events-auto animate-pulse`}
                 title={interactLabel}
               >
-                {canEnterVehicle ? (
+                {canRescueHostage ? (
+                  <Heart className="w-5 h-5 text-white fill-white animate-bounce" />
+                ) : canExitBuilding ? (
+                  <LogOut className="w-5 h-5 text-amber-300" />
+                ) : canEnterBuilding ? (
+                  <Home className="w-5 h-5 text-emerald-300" />
+                ) : canEnterVehicle ? (
                   <Car className="w-5 h-5" />
                 ) : canArrest ? (
                   <Shield className="w-5 h-5 text-yellow-300" />
+                ) : canMakeEventChoice ? (
+                  <Scale className="w-5 h-5 text-amber-300" />
                 ) : (
                   <Hand className="w-5 h-5" />
                 )}
-                <span className="font-['Chakra_Petch'] text-[9px] font-bold uppercase tracking-wider leading-none mt-0.5">
+                <span className="font-['Chakra_Petch'] text-[8px] sm:text-[9px] font-bold uppercase tracking-wider leading-none mt-0.5 text-center">
                   {interactLabel}
                 </span>
               </button>
@@ -511,7 +619,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onPointerUp={(e) => {
                 e.stopPropagation();
-                inputState.current.moveForward = 0;
+                if (inputState.current.moveForward > 0) {
+                  inputState.current.moveForward = 0;
+                }
               }}
               onTouchStart={(e) => {
                 e.stopPropagation();
@@ -519,7 +629,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onTouchEnd={(e) => {
                 e.stopPropagation();
-                inputState.current.moveForward = 0;
+                if (inputState.current.moveForward > 0) {
+                  inputState.current.moveForward = 0;
+                }
               }}
               className="absolute bottom-4 right-4 sm:bottom-6 sm:right-6 w-18 h-22 rounded-2xl bg-gradient-to-t from-emerald-700/80 to-emerald-500/75 border-2 border-emerald-400 text-white flex flex-col items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.5)] backdrop-blur-sm active:scale-95 pointer-events-auto"
               title="Accelerate"
@@ -536,7 +648,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onPointerUp={(e) => {
                 e.stopPropagation();
-                inputState.current.moveForward = 0;
+                if (inputState.current.moveForward < 0) {
+                  inputState.current.moveForward = 0;
+                }
               }}
               onTouchStart={(e) => {
                 e.stopPropagation();
@@ -544,7 +658,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               }}
               onTouchEnd={(e) => {
                 e.stopPropagation();
-                inputState.current.moveForward = 0;
+                if (inputState.current.moveForward < 0) {
+                  inputState.current.moveForward = 0;
+                }
               }}
               className="absolute bottom-4 right-24 sm:bottom-6 sm:right-28 w-15 h-19 rounded-2xl bg-gradient-to-t from-red-700/80 to-red-500/75 border-2 border-red-400 text-white flex flex-col items-center justify-center shadow-[0_0_15px_rgba(239,68,68,0.4)] backdrop-blur-sm active:scale-95 pointer-events-auto"
               title="Brake / Reverse"
@@ -593,20 +709,31 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <Shield className="w-5 h-5 text-blue-200" />
             </button>
 
-            {/* EXIT VEHICLE BUTTON (Top of the arc) */}
+            {/* PROMINENT CLEAR EXIT VEHICLE BUTTON */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
-                inputState.current.enterVehicle = true;
+                if (onExitVehicle) {
+                  onExitVehicle();
+                } else {
+                  inputState.current.enterVehicle = true;
+                }
               }}
               onTouchStart={(e) => {
                 e.stopPropagation();
-                inputState.current.enterVehicle = true;
+                if (onExitVehicle) {
+                  onExitVehicle();
+                } else {
+                  inputState.current.enterVehicle = true;
+                }
               }}
-              className="absolute bottom-40 right-14 sm:bottom-44 sm:right-16 w-11 h-11 rounded-full bg-slate-900/80 border border-slate-500 text-slate-200 flex items-center justify-center shadow backdrop-blur-sm active:scale-90 pointer-events-auto"
-              title="Exit Vehicle"
+              className="absolute bottom-40 right-4 sm:bottom-44 sm:right-6 px-4 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 border-2 border-red-400 text-white flex items-center gap-2 shadow-[0_0_24px_rgba(239,68,68,0.8)] backdrop-blur-md active:scale-95 pointer-events-auto transition-transform z-30 cursor-pointer"
+              title="Exit Vehicle [E]"
             >
-              <LogOut className="w-5 h-5 text-red-400" />
+              <LogOut className="w-5 h-5 text-white shrink-0 animate-pulse" />
+              <span className="font-['Chakra_Petch'] font-black text-xs sm:text-sm uppercase tracking-wider text-white">
+                EXIT VEHICLE
+              </span>
             </button>
           </>
         )}

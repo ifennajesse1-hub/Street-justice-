@@ -16,6 +16,8 @@ import {
   Star,
   Sun,
   Moon,
+  Scale,
+  LogOut,
 } from 'lucide-react';
 import {
   PlayerStats,
@@ -28,7 +30,9 @@ import {
   MilitaryNPCEntity,
   TimeOfDay,
   DynamicEvent,
+  EnterableBuilding,
 } from '../types/game';
+import { InteriorInteractable, ActiveInteriorState } from '../game/engine/BuildingInteriors';
 import { getTerritoryAtCoordinates } from '../game/systems/FactionData';
 import { cityIncidentManager } from '../game/systems/DynamicEventsSystem';
 
@@ -60,6 +64,13 @@ interface HUDProps {
   onToggleFullscreen?: () => void;
   timeOfDay?: TimeOfDay;
   onToggleTimeOfDay?: () => void;
+  nearbyBuildingEntrance?: EnterableBuilding | null;
+  nearbyInteriorInteractable?: InteriorInteractable | null;
+  activeInterior?: ActiveInteriorState | null;
+  onExitBuilding?: () => void;
+  damageFlash?: boolean;
+  onOpenDualIdentity?: () => void;
+  onExitVehicle?: () => void;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -68,6 +79,7 @@ export const HUD: React.FC<HUDProps> = ({
   currentMission,
   activeIncidentObjective,
   currentVehicle,
+  onExitVehicle,
   playerPos,
   playerYaw,
   enemies,
@@ -87,6 +99,12 @@ export const HUD: React.FC<HUDProps> = ({
   onToggleFullscreen,
   timeOfDay = 'day',
   onToggleTimeOfDay,
+  nearbyBuildingEntrance,
+  nearbyInteriorInteractable,
+  activeInterior,
+  onExitBuilding,
+  damageFlash = false,
+  onOpenDualIdentity,
 }) => {
   // Current district / faction territory
   const currentTerritory = getTerritoryAtCoordinates(playerPos.x, playerPos.z);
@@ -179,6 +197,26 @@ export const HUD: React.FC<HUDProps> = ({
                 {Math.round(stats.armor)}
               </span>
             </div>
+
+            {/* Officer Carter Double-Life Reputations Micro-Row (Tap to open detailed Dual Identity Dossier) */}
+            <button
+              onClick={onOpenDualIdentity}
+              className="w-full flex items-center justify-between pt-1 border-t border-slate-800/80 text-[8px] font-mono hover:bg-slate-900/60 rounded px-0.5 py-0.5 transition-colors cursor-pointer group text-left"
+              title="Tap to inspect Officer Carter's Dual Identity Dossier & Underground Opportunities"
+            >
+              <span className="text-blue-400 font-bold flex items-center gap-0.5 group-hover:text-blue-300" title="Official Police Standing">
+                POLICE {stats.policeReputation ?? stats.reputation}%
+              </span>
+              <span className="text-purple-400 font-bold flex items-center gap-0.5 group-hover:text-purple-300" title="Criminal Underworld Trust">
+                CRIME {stats.underworldReputation ?? 15}%
+              </span>
+              <span
+                className={`font-bold flex items-center gap-0.5 ${(stats.suspicionLevel ?? 10) >= 50 ? 'text-red-400 animate-pulse' : 'text-amber-400 group-hover:text-amber-300'}`}
+                title="Internal Affairs Suspicion Level"
+              >
+                HEAT {stats.suspicionLevel ?? 10}%
+              </span>
+            </button>
           </div>
 
           {/* Wanted Level Stars (if active) */}
@@ -206,7 +244,7 @@ export const HUD: React.FC<HUDProps> = ({
           <div className="bg-slate-950/85 border border-amber-500/60 shadow-[0_0_16px_rgba(245,158,11,0.25)] rounded-full px-2.5 sm:px-3 py-1 backdrop-blur-md flex items-center gap-1.5 text-center max-w-full">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping shrink-0" />
             <span className="font-['Chakra_Petch'] font-bold text-[9px] sm:text-xs uppercase tracking-wider text-amber-300 truncate">
-              {distToTarget}M · {objectiveText}
+              {activeInterior ? `INSIDE: ${activeInterior.building.name.toUpperCase()}` : `${distToTarget}M · ${objectiveText}`}
             </span>
           </div>
 
@@ -235,9 +273,23 @@ export const HUD: React.FC<HUDProps> = ({
           {/* Cash & Quick Actions Row */}
           <div className="flex items-center gap-1 justify-end max-w-full">
             {/* Cash Counter */}
-            <div className="bg-slate-950/85 border border-emerald-500/40 px-2 py-0.5 rounded-lg backdrop-blur-md font-mono text-emerald-400 font-bold text-[11px] sm:text-xs shadow-sm shrink-0">
+            <div
+              className="bg-slate-950/85 border border-emerald-500/40 px-2 py-0.5 rounded-lg backdrop-blur-md font-mono text-emerald-400 font-bold text-[11px] sm:text-xs shadow-sm shrink-0"
+              title="Official Wallet Funds"
+            >
               ${stats.money.toLocaleString()}
             </div>
+
+            {/* Dirty Cash Badge (if Carter holds off-the-record street cash) */}
+            {(stats.dirtyCash ?? 0) > 0 && (
+              <div
+                className="bg-amber-950/90 border border-amber-500/60 px-1.5 py-0.5 rounded-lg backdrop-blur-md font-mono text-amber-300 font-bold text-[9px] sm:text-[10px] shadow-sm shrink-0 flex items-center gap-0.5"
+                title="Unlaundered Dirty Cash (Subject to IA Seizure)"
+              >
+                <span>+${(stats.dirtyCash ?? 0).toLocaleString()}</span>
+                <span className="text-[7px] text-amber-400 font-['Chakra_Petch'] uppercase font-bold">DIRTY</span>
+              </div>
+            )}
 
             {/* Quick action buttons cluster */}
             <div className="flex items-center gap-0.5 bg-slate-950/80 border border-slate-800 p-0.5 rounded-lg backdrop-blur-md shrink-0">
@@ -251,6 +303,16 @@ export const HUD: React.FC<HUDProps> = ({
                   <span className="font-mono text-[9px] font-bold text-red-300">
                     {cityIncidentManager.activeIncidents.length}
                   </span>
+                </button>
+              )}
+
+              {onOpenDualIdentity && (
+                <button
+                  onClick={onOpenDualIdentity}
+                  className="hover:bg-slate-800 text-purple-300 hover:text-purple-200 p-1 rounded transition-colors flex items-center"
+                  title="Carter's Dual Identity Dossier"
+                >
+                  <Scale className="w-3 h-3 text-purple-400" />
                 </button>
               )}
 
@@ -413,13 +475,20 @@ export const HUD: React.FC<HUDProps> = ({
             </div>
           </div>
 
-          {/* Territory indicator tag */}
-          <div
-            className={`px-1.5 py-0.2 rounded text-[8px] font-['Chakra_Petch'] font-bold tracking-wider uppercase backdrop-blur-md shadow flex items-center gap-1 truncate max-w-[120px] ${currentTerritory.badgeBg}`}
-          >
-            <Compass className="w-2 h-2 shrink-0" />
-            <span className="truncate">{currentTerritory.name}</span>
-          </div>
+          {/* Territory indicator tag / Building interior tag */}
+          {activeInterior ? (
+            <div className="px-1.5 py-0.2 rounded text-[8px] font-['Chakra_Petch'] font-bold tracking-wider uppercase backdrop-blur-md shadow flex items-center gap-1 truncate max-w-[140px] bg-emerald-950/90 text-emerald-300 border border-emerald-500/50">
+              <Home className="w-2 h-2 shrink-0 text-emerald-400" />
+              <span className="truncate">{activeInterior.building.name}</span>
+            </div>
+          ) : (
+            <div
+              className={`px-1.5 py-0.2 rounded text-[8px] font-['Chakra_Petch'] font-bold tracking-wider uppercase backdrop-blur-md shadow flex items-center gap-1 truncate max-w-[120px] ${currentTerritory.badgeBg}`}
+            >
+              <Compass className="w-2 h-2 shrink-0" />
+              <span className="truncate">{currentTerritory.name}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -440,8 +509,8 @@ export const HUD: React.FC<HUDProps> = ({
 
       {/* VEHICLE SPEEDOMETER (If driving cruiser) */}
       {currentVehicle && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-slate-950/80 border border-blue-500/40 rounded-full px-3 py-1 backdrop-blur-md shadow-lg flex items-center gap-2 pointer-events-none">
-          <span className="text-[10px] font-['Chakra_Petch'] font-bold text-slate-300">
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-slate-950/85 border border-blue-500/50 rounded-full pl-3 pr-1.5 py-1 backdrop-blur-md shadow-xl flex items-center gap-2 pointer-events-auto z-20">
+          <span className="text-[10px] font-['Chakra_Petch'] font-bold text-slate-200">
             {Math.round(currentVehicle.speed * 3.6)} KM/H
           </span>
           {currentVehicle.isSirenOn && (
@@ -449,7 +518,73 @@ export const HUD: React.FC<HUDProps> = ({
               SIREN
             </span>
           )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onExitVehicle?.();
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onExitVehicle?.();
+            }}
+            onTouchStart={(e) => {
+              e.stopPropagation();
+              onExitVehicle?.();
+            }}
+            className="ml-1 bg-red-600/95 hover:bg-red-500 active:scale-95 text-white font-['Chakra_Petch'] text-[10px] sm:text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-[0_0_12px_rgba(239,68,68,0.6)] cursor-pointer transition-transform"
+            title="Exit Vehicle [E]"
+          >
+            <LogOut className="w-3.5 h-3.5 text-white animate-pulse" />
+            <span>EXIT [E]</span>
+          </button>
         </div>
+      )}
+
+      {/* ENTERABLE BUILDING PROMPT BANNER */}
+      {nearbyBuildingEntrance && !currentVehicle && (
+        <div className="absolute bottom-28 sm:bottom-32 left-1/2 -translate-x-1/2 bg-slate-950/90 border-2 border-emerald-400/90 rounded-2xl px-4 py-2 backdrop-blur-md shadow-[0_0_24px_rgba(16,185,129,0.5)] flex items-center gap-3 pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-150 z-20 max-w-[90vw]">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-400 shrink-0">
+            <Home className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-['Chakra_Petch'] font-bold uppercase text-emerald-400 tracking-wider">
+              ENTER BUILDING
+            </div>
+            <div className="text-xs sm:text-sm font-['Chakra_Petch'] font-bold text-slate-100 uppercase tracking-wide truncate max-w-[200px] sm:max-w-[320px]">
+              {nearbyBuildingEntrance.name}
+            </div>
+          </div>
+          <span className="ml-1 sm:ml-2 font-mono text-[11px] font-bold bg-emerald-600 text-white px-2.5 py-1 rounded-lg shadow shrink-0">
+            [E]
+          </span>
+        </div>
+      )}
+
+      {/* INTERIOR INTERACTION PROMPT BANNER */}
+      {nearbyInteriorInteractable && (
+        <div className="absolute bottom-28 sm:bottom-32 left-1/2 -translate-x-1/2 bg-slate-950/90 border-2 border-amber-400/90 rounded-2xl px-4 py-2 backdrop-blur-md shadow-[0_0_24px_rgba(251,191,36,0.5)] flex items-center gap-3 pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-150 z-20 max-w-[90vw]">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-400 shrink-0">
+            <Compass className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-[10px] font-['Chakra_Petch'] font-bold uppercase text-amber-400 tracking-wider">
+              {nearbyInteriorInteractable.type === 'exit_door' ? 'EXIT TO STREET' : 'INTERIOR INTERACTION'}
+            </div>
+            <div className="text-xs sm:text-sm font-['Chakra_Petch'] font-bold text-slate-100 uppercase tracking-wide truncate max-w-[200px] sm:max-w-[320px]">
+              {nearbyInteriorInteractable.prompt}
+            </div>
+          </div>
+          <span className="ml-1 sm:ml-2 font-mono text-[11px] font-bold bg-amber-500 text-slate-950 px-2.5 py-1 rounded-lg shadow shrink-0">
+            [E]
+          </span>
+        </div>
+      )}
+      {/* TACTICAL DAMAGE FLASH & LOW HEALTH VIGNETTE */}
+      {damageFlash && (
+        <div className="absolute inset-0 pointer-events-none bg-red-600/35 border-[6px] border-red-500/80 shadow-[inset_0_0_90px_rgba(239,68,68,0.7)] animate-out fade-out duration-250 z-50 transition-opacity" />
+      )}
+      {stats.health <= 35 && stats.health > 0 && (
+        <div className="absolute inset-0 pointer-events-none shadow-[inset_0_0_60px_rgba(239,68,68,0.45)] animate-pulse z-40 transition-opacity" />
       )}
     </div>
   );

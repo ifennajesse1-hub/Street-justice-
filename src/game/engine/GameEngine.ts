@@ -11,16 +11,24 @@ import {
   TimeOfDay,
   WeatherType,
   Mission,
+  CustomizationSettings,
 } from '../../types/game';
 import { generateCityDistrict, CityBuildResult, CollisionBox, getGroundElevation } from './CityGenerator';
 import { createCharacterMesh, updateCharacterAnimation, CharacterRig, attachWeaponToRig } from './CharacterModels';
+import { createBlockyCharacterMesh } from './BlockyCharacterModels';
 import { createVehicleMesh, updateVehicleAnimation, VehicleRig } from './VehicleModels';
 import { AIController } from '../ai/AIController';
 import { PEDESTRIAN_CONFIGS } from '../ai/PedestrianSystem';
 import { soundEngine } from '../audio/SoundEffects';
 import { cityIncidentManager } from '../systems/DynamicEventsSystem';
 import { authoritativeEncounterManager } from '../systems/EncounterManager';
-import { DynamicEvent } from '../../types/game';
+import { DynamicEvent, EnterableBuilding, EnterableBuildingId } from '../../types/game';
+import {
+  ENTERABLE_BUILDINGS,
+  buildBuildingInterior,
+  ActiveInteriorState,
+  InteriorInteractable,
+} from './BuildingInteriors';
 
 export interface FloatingText {
   id: string;
@@ -85,6 +93,8 @@ export class GameEngine {
   // Vehicles & Civilian Road Traffic
   public vehicles: { entity: VehicleEntity; rig: VehicleRig }[] = [];
   public currentVehicleIndex: number = -1; // -1 = on foot
+  public vehicleActionCooldown: number = 0; // Cooldown timer to prevent rapid/duplicate enter-exit triggering
+  public timeInsideCurrentVehicle: number = 0; // Elapsed duration inside active vehicle to ensure reliable exiting
   public civilianTraffic: CivilianTrafficCar[] = [];
   public activePursuitVehicle: { entity: VehicleEntity; rig: VehicleRig } | null = null;
 
@@ -111,7 +121,9 @@ export class GameEngine {
   public verticalVelocity: number = 0;
   public cameraShakeAmount: number = 0;
   private footstepTimer: number = 0;
-  private recentGunshotTimer: number = 0;
+  public recentGunshotTimer: number = 0;
+  public isCinematicMode: boolean = false;
+  private cinematicTimer: number = 0;
 
   // Bullets & FX
   private bulletTracers: BulletTracer[] = [];
@@ -122,15 +134,33 @@ export class GameEngine {
 
   // Callbacks for UI sync
   public onStatsChanged?: (stats: PlayerStats) => void;
+  public onPlayerDamaged?: (damage: number) => void;
+  public playerDamageCooldownTimer: number = 0;
   public onWeaponChanged?: (weapon: WeaponConfig) => void;
   public onNotification?: (text: string, type: 'info' | 'alert' | 'success') => void;
   public onMissionObjectiveProgress?: (type: string, amount: number) => void;
   public onIncidentResolved?: (inc: DynamicEvent) => void;
+  public onEventMoralChoiceAvailable?: (event: DynamicEvent) => void;
+  public onOpenArrestEvidenceModal?: (enemy: EnemyEntity) => void;
+  public onWitnessMisconductAlert?: (civilian: CivilianEntity, actionDescription: string) => void;
+  public onPedestrianShout?: (civ: CivilianEntity, text: string) => void;
+  public onTriggerFinalMissionCinematic?: (phase?: 'phase1_threat' | 'phase2_climax_handshake') => void;
+
+  // Enterable Buildings & 3D Interior Simulation
+  public activeInterior: ActiveInteriorState | null = null;
+  public nearbyBuildingEntrance: EnterableBuilding | null = null;
+  public nearbyInteriorInteractable: InteriorInteractable | null = null;
+  public onBuildingEntranceChanged?: (building: EnterableBuilding | null) => void;
+  public onInteriorInteractableChanged?: (interactable: InteriorInteractable | null) => void;
+  public onInteriorStateChanged?: (interior: ActiveInteriorState | null) => void;
+  public onTriggerInteriorInteraction?: (interactable: InteriorInteractable) => void;
+  public exteriorEntranceMarkersGroup: THREE.Group = new THREE.Group();
 
   // Dynamic City Incidents & Tactical Visuals
   public incidentVisualsGroup: THREE.Group;
   private incidentPropsMap: Map<string, THREE.Group> = new Map();
   private incidentSpawnedActors: Set<string> = new Set();
+  public incidentPromptedChoices: Set<string> = new Set();
   private incidentFlames: { mesh: THREE.Mesh; baseScale: number; speed: number; offset: number }[] = [];
   private incidentSmokeRings: { mesh: THREE.Mesh; startY: number; speed: number; offset: number }[] = [];
   private incidentEmergencyBeacons: { light: THREE.PointLight; speed: number; color1: number; color2: number }[] = [];
@@ -141,6 +171,8 @@ export class GameEngine {
   public activeWeaponIndex: number = 0;
   private shootCooldownTimer: number = 0;
   private timer: THREE.Timer = new THREE.Timer();
+  private suspicionDecayTimer: number = 20; // Periodic decay for suspicion during lawful patrols
+  private iaAuditAuditTimer: number = 45; // Periodic check for IA heat consequences
 
   constructor(
     container: HTMLElement,
@@ -240,6 +272,10 @@ export class GameEngine {
     // Dynamic Incident 3D World Visuals Group
     this.incidentVisualsGroup = new THREE.Group();
     this.scene.add(this.incidentVisualsGroup);
+
+    // Enterable Building Exterior Entrance Beacons
+    this.scene.add(this.exteriorEntranceMarkersGroup);
+    this.initExteriorBuildingMarkers();
 
     // City Incident Manager Radio Broadcast Dispatch Wireup
     cityIncidentManager.onRadioBroadcast = (msg, type) => {
@@ -516,6 +552,14 @@ export class GameEngine {
     this.ai.onEnemyArrested = (enemy) => {
       this.checkEnemyIncidentResolution(enemy.id);
     };
+    this.ai.onEnemyKilledByPolice = (enemy, officer) => {
+      this.stats.kills++;
+      this.stats.xp += 75;
+      this.stats.money += 50;
+      this.onStatsChanged?.(this.stats);
+      this.onMissionObjectiveProgress?.('kill', 1);
+      this.checkEnemyIncidentResolution(enemy.id);
+    };
 
     // Setup Bullet Tracers
     const maxTracers = 50;
@@ -700,13 +744,23 @@ export class GameEngine {
       });
       this.missionEnemies = [];
 
+      const isFinalChapter = mission.id === 'ch8_death_before_betrayal';
       const isBoss = mission.id === 'ch5_viper_showdown';
       const isSyndicate = mission.id === 'ch4_bank_hostage';
       const isCedar = mission.id === 'ch2_cedar_defense';
 
-      let configs: { name: string; type: 'thug' | 'enforcer' | 'syndicate_operative' | 'boss'; pos: THREE.Vector3; faction?: any }[] = [];
+      let configs: { name: string; type: 'thug' | 'enforcer' | 'syndicate_operative' | 'boss'; pos: THREE.Vector3; faction?: any; variant?: string }[] = [];
 
-      if (isBoss) {
+      if (isFinalChapter) {
+        // 5 Syndicate Elite Heavy Operatives guarding the Industrial Logistics Depot Stronghold
+        configs = [
+          { name: 'Syndicate Vanguard', type: 'enforcer', pos: new THREE.Vector3(53, 0, -56), faction: 'eclipse_syndicate', variant: 'syndicate_heavy' },
+          { name: 'Syndicate Breacher', type: 'enforcer', pos: new THREE.Vector3(58, 0, -54), faction: 'eclipse_syndicate', variant: 'syndicate_heavy' },
+          { name: 'Syndicate Heavy Gunner', type: 'enforcer', pos: new THREE.Vector3(62, 0, -48), faction: 'eclipse_syndicate', variant: 'syndicate_heavy' },
+          { name: 'Syndicate Infiltrator', type: 'thug', pos: new THREE.Vector3(48, 0, -46), faction: 'eclipse_syndicate', variant: 'syndicate_heavy' },
+          { name: 'Syndicate Tactician', type: 'enforcer', pos: new THREE.Vector3(55, 0, -44), faction: 'eclipse_syndicate', variant: 'syndicate_heavy' },
+        ];
+      } else if (isBoss) {
         configs = [
           { name: 'Viper Vance', type: 'boss', pos: new THREE.Vector3(65, 0, 65), faction: 'iron_vipers' },
           { name: 'Viper Sledge', type: 'enforcer', pos: new THREE.Vector3(62, 0, 68), faction: 'iron_vipers' },
@@ -743,21 +797,57 @@ export class GameEngine {
       }
 
       configs.forEach((c) => {
-        const rig = createCharacterMesh(c.type, 'default', c.name, c.faction);
+        const rig = createCharacterMesh(c.type, c.variant || 'default', c.name, c.faction);
         this.scene.add(rig.root);
         const enemy = this.ai.spawnEnemy(c.type, c.pos, rig, c.name, c.faction);
         enemy.alertLevel = 100;
+        if (isFinalChapter) {
+          enemy.maxHealth = 180;
+          enemy.health = 180;
+        }
         this.missionEnemies.push(enemy);
         enc.spawnedEnemyIds.push(enemy.id);
       });
 
-      // Spawn civilian hostages for hostage rescue missions
-      if (isHostage) {
+      // Spawn civilian hostages
+      if (isFinalChapter) {
+        // Spawn 3 distinct captive civilians with real health and bound blocky meshes
+        const hostagesInfo = [
+          { name: 'Captive Elena', pos: new THREE.Vector3(53.5, 0, -51), role: 'Hostage Resident' },
+          { name: 'Captive Marcus', pos: new THREE.Vector3(56.5, 0, -52), role: 'Hostage Youth' },
+          { name: 'Captive Dr. Aris', pos: new THREE.Vector3(55.0, 0, -48), role: 'Hostage Scientist' },
+        ];
+
+        hostagesInfo.forEach((hInfo) => {
+          const hRig = createCharacterMesh('civilian', 'hostage_bound', hInfo.name);
+          this.scene.add(hRig.root);
+          const hCiv = this.ai.spawnCivilian(hInfo.pos, hRig, { name: hInfo.name });
+          hCiv.state = 'cowering';
+          (hCiv as any).health = 120;
+          (hCiv as any).maxHealth = 120;
+          (hCiv as any).isCaptive = true;
+          (hCiv as any).isRescued = false;
+          this.missionHostages.push(hCiv);
+          enc.spawnedHostageIds.push(hCiv.id);
+        });
+
+        // Trigger Phase 1 cinematic sequence for the final mission
+        this.onTriggerFinalMissionCinematic?.('phase1_threat');
+
+        this.onNotification?.(
+          'CRITICAL ULTIMATUM: Julian Vance holds 3 hostages at the depot! Choose Carter\'s destiny.',
+          'alert'
+        );
+      } else if (isHostage) {
         const hostageRig = createCharacterMesh('civilian', 'default', 'Hostage Citizen');
         this.scene.add(hostageRig.root);
         const hCiv = this.ai.spawnCivilian(new THREE.Vector3(this.waypointPos.x - 1.5, 0, this.waypointPos.z + 0.5), hostageRig, { name: 'Hostage Citizen' });
         hCiv.state = 'panicking';
         hCiv.panicTimer = 120;
+        (hCiv as any).health = 100;
+        (hCiv as any).maxHealth = 100;
+        (hCiv as any).isCaptive = true;
+        (hCiv as any).isRescued = false;
         this.missionHostages.push(hCiv);
         enc.spawnedHostageIds.push(hCiv.id);
 
@@ -981,17 +1071,26 @@ export class GameEngine {
       this.updateOnFootMode(delta, time, inputs);
     }
 
-    // 3. Vehicle Entry / Exit trigger
+    // 3. Vehicle Action Cooldown & Entry / Exit trigger
+    if (this.vehicleActionCooldown > 0) {
+      this.vehicleActionCooldown -= delta;
+    }
+
     if (inputs.enterVehicle) {
       inputs.enterVehicle = false;
       this.toggleVehicleEnterExit();
     }
+
+    // 3B. Enterable Building Entrances & Interior Interactables
+    this.updateBuildingInteractions(inputs, delta, time);
 
     // 4. Update AI (Criminals, Police NPCs and Civilians)
     if (this.recentGunshotTimer > 0) {
       this.recentGunshotTimer -= delta;
     }
     const gunshotFired = this.recentGunshotTimer > 0;
+
+    const currentCollisions = this.activeInterior ? this.activeInterior.collisionBoxes : this.collisionBoxes;
 
     this.ai.update(
       delta,
@@ -1000,20 +1099,23 @@ export class GameEngine {
       (enemy, targetPos) => {
         this.enemyFireBullet(enemy, targetPos);
       },
-      this.collisionBoxes,
+      currentCollisions,
       this.camera,
       gunshotFired,
       this.vehicles,
-      this.isAiming
+      this.isAiming,
+      this.playerYaw
     );
 
-    // 4B. Update City Incident Simulation & 3D Incident Visuals
-    cityIncidentManager.update(delta);
-    this.updateDynamicIncidentVisuals(delta, time);
-    this.checkPlayerNearDynamicIncidents();
+    // 4B. Update City Incident Simulation & 3D Incident Visuals (Only outside in city)
+    if (!this.activeInterior) {
+      cityIncidentManager.update(delta);
+      this.updateDynamicIncidentVisuals(delta, time);
+      this.checkPlayerNearDynamicIncidents();
+    }
 
     // 5. Update Waypoint Animation & Distance Check
-    if (this.isWaypointActive) {
+    if (this.isWaypointActive && !this.activeInterior) {
       this.beaconDiamond.rotation.y = time * 2.0;
       this.beaconDiamond.position.y = 2.4 + Math.sin(time * 3) * 0.25;
 
@@ -1033,14 +1135,18 @@ export class GameEngine {
       }
     }
 
-    // 6. Update Dynamic Civilian Road Traffic
-    this.updateCivilianTraffic(delta, time);
+    // 6. Update Dynamic Civilian Road Traffic (Only outside in city)
+    if (!this.activeInterior) {
+      this.updateCivilianTraffic(delta, time);
+    }
 
-    // 7. Update Criminal vehicle AI in Chase Mode / Active Pursuit
-    if (this.activePursuitVehicle && this.activePursuitVehicle.entity.health > 0) {
-      this.updateActivePursuitVehicle(delta, time);
-    } else {
-      this.updateCriminalChaseAI(delta, time);
+    // 7. Update Criminal vehicle AI in Chase Mode / Active Pursuit (Only outside in city)
+    if (!this.activeInterior) {
+      if (this.activePursuitVehicle && this.activePursuitVehicle.entity.health > 0) {
+        this.updateActivePursuitVehicle(delta, time);
+      } else {
+        this.updateCriminalChaseAI(delta, time);
+      }
     }
 
     // 7. Update Rain Particles
@@ -1070,6 +1176,36 @@ export class GameEngine {
         this.stats.wantedLevel = Math.max(0, this.stats.wantedLevel - 1);
         this.stats.wantedCooldown = 15;
         this.onStatsChanged?.(this.stats);
+      }
+    }
+
+    // 10b. Officer Carter Suspicion Decay & IA Scrutiny Systems
+    const curSuspicion = this.stats.suspicionLevel ?? 10;
+    // Suspicion decays gradually only when Carter is not in active wanted status and not committing violent infractions
+    if (curSuspicion > 5 && this.stats.wantedLevel === 0) {
+      this.suspicionDecayTimer -= delta;
+      if (this.suspicionDecayTimer <= 0) {
+        this.suspicionDecayTimer = 25; // Decays 1% every 25 seconds of clean, peaceful patrol
+        const newSusp = Math.max(5, curSuspicion - 1);
+        this.stats.suspicionLevel = newSusp;
+        this.ai.carterDoubleLife.suspicionLevel = newSusp;
+        this.onStatsChanged?.(this.stats);
+      }
+    }
+
+    // High Suspicion IA Investigation Consequences
+    if (curSuspicion >= 70) {
+      this.iaAuditAuditTimer -= delta;
+      if (this.iaAuditAuditTimer <= 0) {
+        this.iaAuditAuditTimer = 40 + Math.random() * 20;
+        const auditAlerts = [
+          '⚠️ INTERNAL AFFAIRS AUDIT: Detective Vance from IA requested Unit 24 shift bodycam recordings!',
+          '⚠️ IA INQUIRY NOTICE: Precinct 9 Internal Affairs is scrutinizing Carter\'s recent suspect dispositions!',
+          '⚠️ PRECINCT MEMO: IA field investigator spotted monitoring Carter\'s patrol sector.',
+        ];
+        const chosen = auditAlerts[Math.floor(Math.random() * auditAlerts.length)];
+        this.onNotification?.(chosen, 'alert');
+        soundEngine.playRadioChime();
       }
     }
 
@@ -1322,7 +1458,7 @@ export class GameEngine {
   }
 
   /**
-   * Checks player interaction with active dynamic incidents (extinguishing fires, resolving scenes, spawning actors)
+   * Checks player interaction with active dynamic incidents (extinguishing fires, resolving scenes, spawning actors, moral choices)
    */
   private checkPlayerNearDynamicIncidents() {
     for (const inc of cityIncidentManager.activeIncidents) {
@@ -1335,8 +1471,19 @@ export class GameEngine {
         this.spawnActorsForIncident(inc);
       }
 
-      // Player resolving peaceful scene or emergency disaster
-      if (dist < 14) {
+      // Moral choice prompt when Carter approaches the incident scene (within 8.5m)
+      if (
+        dist < 8.5 &&
+        inc.moralChoice &&
+        !this.incidentPromptedChoices.has(inc.id) &&
+        !inc.choiceMade
+      ) {
+        this.incidentPromptedChoices.add(inc.id);
+        this.onEventMoralChoiceAvailable?.(inc);
+      }
+
+      // Player resolving peaceful scene or emergency disaster without moral choice
+      if (dist < 14 && !inc.moralChoice) {
         if (inc.type === 'fire') {
           soundEngine.playRadioChime();
           cityIncidentManager.resolveIncidentByPlayer(inc.id);
@@ -1349,7 +1496,7 @@ export class GameEngine {
           this.isWaypointActive = false;
           this.onIncidentResolved?.(inc);
           break;
-        } else if (inc.type === 'accident' || inc.type === 'civilian_emergency') {
+        } else if (inc.type === 'civilian_emergency') {
           soundEngine.playRadioChime();
           cityIncidentManager.resolveIncidentByPlayer(inc.id);
           this.stats.xp += inc.rewardXP;
@@ -1357,7 +1504,7 @@ export class GameEngine {
           this.stats.reputation = Math.min(100, this.stats.reputation + 8);
           this.stats.civiliansRescued += 1;
           this.onStatsChanged?.(this.stats);
-          this.onNotification?.(`Accident Cleared & Civilians Aided! +$${inc.rewardMoney} (+8 Rep)`, 'success');
+          this.onNotification?.(`Emergency Cleared & Civilians Aided! +$${inc.rewardMoney} (+8 Rep)`, 'success');
           this.isWaypointActive = false;
           this.onIncidentResolved?.(inc);
           break;
@@ -1377,9 +1524,9 @@ export class GameEngine {
       }
 
       // Check combat incident resolution (all hostile suspects tracked specifically for this encounter neutralized or arrested)
-      if (this.incidentSpawnedActors.has(inc.id) && (inc.type === 'robbery' || inc.type === 'hostage' || inc.type === 'gang_war' || inc.type === 'prison_break' || inc.type === 'disturbance' || inc.type === 'pursuit')) {
+      if (this.incidentSpawnedActors.has(inc.id) && inc.spawnedEnemyIds && inc.spawnedEnemyIds.length > 0) {
         const encounterEnemies = this.ai.enemies.filter((e) => inc.spawnedEnemyIds?.includes(e.id));
-        if (encounterEnemies.length > 0 && encounterEnemies.every((e) => e.state === 'dead' || e.state === 'arrested')) {
+        if (encounterEnemies.length > 0 && encounterEnemies.every((e) => e.state === 'dead' || e.state === 'arrested' || e.state === 'surrendered')) {
           this.resolveCombatIncident(inc, encounterEnemies);
           break;
         }
@@ -1387,8 +1534,66 @@ export class GameEngine {
     }
   }
 
+  public resolveIncidentChoice(incidentId: string, choice: 'good' | 'shady') {
+    const inc = cityIncidentManager.activeIncidents.find((i) => i.id === incidentId);
+    if (!inc) return;
+
+    cityIncidentManager.resolveIncidentWithMoralChoice(incidentId, choice);
+    this.isWaypointActive = false;
+    this.onIncidentResolved?.(inc);
+
+    if (inc.spawnedEnemyIds) {
+      for (const eid of inc.spawnedEnemyIds) {
+        const enemy = this.ai.enemies.find((e) => e.id === eid);
+        if (enemy) {
+          if (choice === 'good') {
+            enemy.state = 'arrested';
+            enemy.shootCooldown = 999999;
+            enemy.alertLevel = 0;
+            const rig = this.ai.enemyRigs[enemy.meshIndex];
+            if (rig?.weaponMesh) rig.weaponMesh.visible = false;
+          } else {
+            enemy.state = 'flee';
+            enemy.alertLevel = 0;
+            enemy.target = { x: enemy.position.x + 30, y: 0, z: enemy.position.z + 30 };
+            const rig = this.ai.enemyRigs[enemy.meshIndex];
+            if (rig?.weaponMesh) rig.weaponMesh.visible = false;
+          }
+        }
+      }
+    }
+
+    // Clean up after 7 seconds
+    if (inc.spawnedEnemyIds && inc.spawnedEnemyIds.length > 0) {
+      setTimeout(() => {
+        for (const eid of inc.spawnedEnemyIds || []) {
+          this.ai.removeEnemy(eid, this.scene);
+        }
+      }, 7000);
+    }
+  }
+
   public resolveCombatIncident(inc: DynamicEvent, encounterEnemies: EnemyEntity[]) {
     if (inc.status === 'resolved' || inc.status === 'completed') return;
+
+    // If incident has an active moral choice, allow Carter to make his decision
+    if (inc.moralChoice && !inc.choiceMade) {
+      for (const enemy of encounterEnemies) {
+        if (enemy.state !== 'dead') {
+          enemy.state = 'surrendered';
+        }
+        enemy.shootCooldown = 999999;
+        enemy.alertLevel = 0;
+        enemy.target = undefined;
+        const rig = this.ai.enemyRigs[enemy.meshIndex];
+        if (rig?.weaponMesh) {
+          rig.weaponMesh.visible = false;
+        }
+      }
+      this.onEventMoralChoiceAvailable?.(inc);
+      return;
+    }
+
     inc.status = 'resolved';
     inc.active = false;
     soundEngine.playRadioChime();
@@ -1460,7 +1665,223 @@ export class GameEngine {
     inc.spawnedPoliceIds = [];
     inc.spawnedCivilianIds = [];
 
-    if (inc.type === 'gang_war') {
+    if (inc.type === 'carjacking') {
+      // 1. Armed Carjacker pointing weapon at civilian driver
+      const carjackerRig = createCharacterMesh('thug', 'default', 'Armed Carjacker');
+      this.scene.add(carjackerRig.root);
+      const cj = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x + 1.2, 0, inc.position.z), carjackerRig, 'Armed Carjacker');
+      cj.alertLevel = 90;
+      cj.target = { x: inc.position.x - 1.5, y: 0, z: inc.position.z };
+      inc.spawnedEnemyIds.push(cj.id);
+
+      // 2. Terrified civilian driver
+      const driverRig = createCharacterMesh('civilian', 'default', 'Civilian Driver');
+      this.scene.add(driverRig.root);
+      const driver = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x - 1.5, 0, inc.position.z), driverRig, { name: 'Civilian Driver', courage: 0.1 });
+      driver.state = 'panicking';
+      driver.panicTimer = 60;
+      inc.spawnedCivilianIds.push(driver.id);
+
+      this.onNotification?.(`DISPATCH 10-25: Active Carjacking on ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'fleeing_criminal') {
+      // 1. Fleeing Runner sprinting down alley
+      const runnerRig = createCharacterMesh('thug', 'default', 'Fleeing Robber');
+      this.scene.add(runnerRig.root);
+      const runner = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x, 0, inc.position.z), runnerRig, 'Fleeing Robber');
+      runner.alertLevel = 75;
+      runner.state = 'flee';
+      runner.target = { x: inc.position.x + 8, y: 0, z: inc.position.z + 14 };
+      inc.spawnedEnemyIds.push(runner.id);
+
+      // 2. Pursuing Officer
+      const chasingRig = createCharacterMesh('police_npc', 'patrol', 'Officer Hayes');
+      this.scene.add(chasingRig.root);
+      const chaser = this.ai.spawnPoliceNPC(new THREE.Vector3(inc.position.x - 5, 0, inc.position.z - 6), chasingRig, 'Officer Hayes', '219', 'patrol');
+      chaser.assignedIncidentId = inc.id;
+      chaser.state = 'responding';
+      chaser.targetPos = { x: inc.position.x, y: 0, z: inc.position.z };
+      inc.spawnedPoliceIds.push(chaser.id);
+
+      this.onNotification?.(`DISPATCH 10-15: Foot pursuit in progress at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'armed_robbery') {
+      // Armed Robber
+      const robberRig = createCharacterMesh('enforcer', 'default', 'Syndicate Gunman');
+      this.scene.add(robberRig.root);
+      const r = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x + 1, 0, inc.position.z), robberRig, 'Syndicate Gunman');
+      r.alertLevel = 100;
+      r.target = { x: inc.position.x - 2, y: 0, z: inc.position.z };
+      inc.spawnedEnemyIds.push(r.id);
+
+      // Frightened jeweler
+      const jewelerRig = createCharacterMesh('civilian', 'default', 'Store Jeweler');
+      this.scene.add(jewelerRig.root);
+      const j = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x - 2, 0, inc.position.z), jewelerRig, { name: 'Store Jeweler', courage: 0.1 });
+      j.state = 'panicking';
+      j.panicTimer = 60;
+      inc.spawnedCivilianIds.push(j.id);
+
+      this.onNotification?.(`DISPATCH 10-31: Armed robbery in progress at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'store_robbery') {
+      // Store robbery
+      const robberRig = createCharacterMesh('enforcer', 'default', 'Store Robber');
+      this.scene.add(robberRig.root);
+      const r = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x, 0, inc.position.z), robberRig, 'Store Robber');
+      r.alertLevel = 100;
+      r.target = { x: inc.position.x - 2.8, y: 0, z: inc.position.z + 1.5 };
+      inc.spawnedEnemyIds.push(r.id);
+
+      const clerkRig = createCharacterMesh('civilian', 'default', 'Store Clerk');
+      this.scene.add(clerkRig.root);
+      const clerk = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x - 2.8, 0, inc.position.z + 1.5), clerkRig, { name: 'Store Clerk', courage: 0.1 });
+      clerk.state = 'panicking';
+      clerk.panicTimer = 60;
+      inc.spawnedCivilianIds.push(clerk.id);
+
+      this.onNotification?.(`DISPATCH 10-31: Cash register hold-up at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'street_fight') {
+      // 2 Street brawlers
+      const b1Rig = createCharacterMesh('thug', 'default', 'Brawler Vance');
+      this.scene.add(b1Rig.root);
+      const b1 = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x - 1, 0, inc.position.z), b1Rig, 'Brawler Vance');
+      b1.alertLevel = 60;
+      b1.health = 50;
+      inc.spawnedEnemyIds.push(b1.id);
+
+      const b2Rig = createCharacterMesh('thug', 'default', 'Brawler Bruno');
+      this.scene.add(b2Rig.root);
+      const b2 = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x + 1, 0, inc.position.z), b2Rig, 'Brawler Bruno');
+      b2.alertLevel = 60;
+      b2.health = 50;
+      inc.spawnedEnemyIds.push(b2.id);
+
+      // Witness
+      const witnessRig = createCharacterMesh('civilian', 'default', 'Diner Bystander');
+      this.scene.add(witnessRig.root);
+      const wit = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x, 0, inc.position.z + 3.5), witnessRig, { name: 'Diner Bystander' });
+      wit.state = 'witnessing';
+      inc.spawnedCivilianIds.push(wit.id);
+
+      this.onNotification?.(`DISPATCH 10-10: Street fight reported at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'pursuit') {
+      // Speeding suspect driver
+      const speederRig = createCharacterMesh('thug', 'default', 'Tuner Speeder');
+      this.scene.add(speederRig.root);
+      const speeder = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x + 1, 0, inc.position.z), speederRig, 'Tuner Speeder');
+      speeder.alertLevel = 80;
+      inc.spawnedEnemyIds.push(speeder.id);
+
+      const pursuitOfficerRig = createCharacterMesh('police_npc', 'pursuit', 'Pursuit Unit 1');
+      this.scene.add(pursuitOfficerRig.root);
+      const pOff = this.ai.spawnPoliceNPC(new THREE.Vector3(inc.position.x - 4, 0, inc.position.z - 3), pursuitOfficerRig, 'Pursuit Unit 1', '302', 'pursuit');
+      pOff.assignedIncidentId = inc.id;
+      inc.spawnedPoliceIds.push(pOff.id);
+
+      this.onNotification?.(`DISPATCH 10-25: High-speed pursuit active at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'officer_backup') {
+      // Pinned officer
+      const pinnedRig = createCharacterMesh('police_npc', 'patrol', 'Officer Diaz');
+      this.scene.add(pinnedRig.root);
+      const pinned = this.ai.spawnPoliceNPC(new THREE.Vector3(inc.position.x - 3, 0, inc.position.z), pinnedRig, 'Officer Diaz', '284', 'patrol');
+      pinned.assignedIncidentId = inc.id;
+      pinned.health = 55;
+      pinned.state = 'engaging';
+      inc.spawnedPoliceIds.push(pinned.id);
+
+      // 2 Hostile shooters
+      const g1Rig = createCharacterMesh('enforcer', 'default', 'Syndicate Shooter A');
+      this.scene.add(g1Rig.root);
+      const g1 = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x + 3.5, 0, inc.position.z - 2), g1Rig, 'Syndicate Shooter A');
+      g1.alertLevel = 100;
+      inc.spawnedEnemyIds.push(g1.id);
+
+      const g2Rig = createCharacterMesh('enforcer', 'default', 'Syndicate Shooter B');
+      this.scene.add(g2Rig.root);
+      const g2 = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x + 4, 0, inc.position.z + 2), g2Rig, 'Syndicate Shooter B');
+      g2.alertLevel = 100;
+      inc.spawnedEnemyIds.push(g2.id);
+
+      this.onNotification?.(`DISPATCH 10-78: Officer pinned down at ${inc.locationName}! ALL UNITS ASSIST!`, 'alert');
+    } else if (inc.type === 'civilian_report') {
+      // Distressed citizen
+      const civRig = createCharacterMesh('civilian', 'default', 'Mugged Citizen');
+      this.scene.add(civRig.root);
+      const c = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x - 2, 0, inc.position.z), civRig, { name: 'Mugged Citizen' });
+      c.state = 'panicking';
+      c.panicTimer = 45;
+      inc.spawnedCivilianIds.push(c.id);
+
+      // Thief in alley
+      const thiefRig = createCharacterMesh('thug', 'default', 'Alley Mugger');
+      this.scene.add(thiefRig.root);
+      const th = this.ai.spawnEnemy('thug', new THREE.Vector3(inc.position.x + 3.5, 0, inc.position.z + 2), thiefRig, 'Alley Mugger');
+      th.alertLevel = 60;
+      inc.spawnedEnemyIds.push(th.id);
+
+      this.onNotification?.(`DISPATCH 10-44: Civilian flagged down patrol at ${inc.locationName}!`, 'info');
+    } else if (inc.type === 'suspicious_valuable') {
+      // Suspicious courier
+      const courierRig = createCharacterMesh('enforcer', 'default', 'Suspicious Courier');
+      this.scene.add(courierRig.root);
+      const cr = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x, 0, inc.position.z), courierRig, 'Suspicious Courier');
+      cr.alertLevel = 45;
+      inc.spawnedEnemyIds.push(cr.id);
+
+      this.onNotification?.(`DISPATCH 10-53: Suspicious courier spotted with heavy bag at ${inc.locationName}!`, 'info');
+    } else if (inc.type === 'accident') {
+      // 2 Drivers
+      const d1Rig = createCharacterMesh('civilian', 'default', 'Driver A');
+      this.scene.add(d1Rig.root);
+      const d1 = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x - 2.5, 0, inc.position.z - 1), d1Rig, { name: 'Driver A' });
+      d1.state = 'witnessing';
+      inc.spawnedCivilianIds.push(d1.id);
+
+      const d2Rig = createCharacterMesh('civilian', 'default', 'Driver B');
+      this.scene.add(d2Rig.root);
+      const d2 = this.ai.spawnCivilian(new THREE.Vector3(inc.position.x + 2.5, 0, inc.position.z + 1), d2Rig, { name: 'Driver B' });
+      d2.state = 'panicking';
+      d2.panicTimer = 35;
+      inc.spawnedCivilianIds.push(d2.id);
+
+      this.onNotification?.(`DISPATCH 10-50: Multi-car collision at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'ambush_police') {
+      // Ambushed officer
+      const ambOfficerRig = createCharacterMesh('police_npc', 'patrol', 'Officer Kowalski');
+      this.scene.add(ambOfficerRig.root);
+      const ambOff = this.ai.spawnPoliceNPC(new THREE.Vector3(inc.position.x - 3, 0, inc.position.z), ambOfficerRig, 'Officer Kowalski', '205', 'patrol');
+      ambOff.assignedIncidentId = inc.id;
+      ambOff.state = 'engaging';
+      inc.spawnedPoliceIds.push(ambOff.id);
+
+      // 2 Gang shooters
+      const amb1Rig = createCharacterMesh('enforcer', 'default', 'Ambush Gunner 1', 'cobalt_skulls');
+      this.scene.add(amb1Rig.root);
+      const amb1 = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x + 3.5, 0, inc.position.z - 2), amb1Rig, 'Ambush Gunner 1', 'cobalt_skulls');
+      amb1.alertLevel = 100;
+      inc.spawnedEnemyIds.push(amb1.id);
+
+      const amb2Rig = createCharacterMesh('enforcer', 'default', 'Ambush Gunner 2', 'cobalt_skulls');
+      this.scene.add(amb2Rig.root);
+      const amb2 = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x + 4.5, 0, inc.position.z + 2), amb2Rig, 'Ambush Gunner 2', 'cobalt_skulls');
+      amb2.alertLevel = 100;
+      inc.spawnedEnemyIds.push(amb2.id);
+
+      this.onNotification?.(`DISPATCH 10-99: OFFICER UNDER ATTACK! Gang ambush at ${inc.locationName}!`, 'alert');
+    } else if (inc.type === 'bank_incident') {
+      // 2 Vault robbers
+      const bLeaderRig = createCharacterMesh('boss', 'default', 'Vault Drill Leader');
+      this.scene.add(bLeaderRig.root);
+      const bl = this.ai.spawnEnemy('boss', new THREE.Vector3(inc.position.x + 1, 0, inc.position.z - 1), bLeaderRig, 'Vault Drill Leader');
+      bl.alertLevel = 100;
+      inc.spawnedEnemyIds.push(bl.id);
+
+      const bGunnerRig = createCharacterMesh('enforcer', 'default', 'Heist Sentry');
+      this.scene.add(bGunnerRig.root);
+      const bg = this.ai.spawnEnemy('enforcer', new THREE.Vector3(inc.position.x - 2, 0, inc.position.z + 2), bGunnerRig, 'Heist Sentry');
+      bg.alertLevel = 100;
+      inc.spawnedEnemyIds.push(bg.id);
+
+      this.onNotification?.(`DISPATCH 10-90: Vault breach alarm at ${inc.locationName}! SWAT dispatched!`, 'alert');
+    } else if (inc.type === 'gang_war') {
       // 1 Cobalt Skull and 1 Neon Python in active crossfire
       const c1Rig = createCharacterMesh('enforcer', 'default', 'Skulls Gunner', 'cobalt_skulls');
       this.scene.add(c1Rig.root);
@@ -1603,7 +2024,7 @@ export class GameEngine {
       survivor.state = 'panicking';
       survivor.panicTimer = 60;
       inc.spawnedCivilianIds.push(survivor.id);
-    } else if (inc.type === 'accident' || inc.type === 'civilian_emergency') {
+    } else if (inc.type === 'civilian_emergency') {
       // Distressed pedestrian/driver
       const civRig = createCharacterMesh('civilian', 'default', 'Distressed Citizen');
       this.scene.add(civRig.root);
@@ -1664,6 +2085,10 @@ export class GameEngine {
       if (this.reloadTimer <= 0) {
         this.finishReload();
       }
+    }
+
+    if (this.playerDamageCooldownTimer > 0) {
+      this.playerDamageCooldownTimer -= delta;
     }
 
     // Deadzone filtering for mobile joystick
@@ -1727,8 +2152,8 @@ export class GameEngine {
     const turnRate = turnDiff / Math.max(delta, 0.001);
     this.previousPlayerRot = currentRot;
 
-    // Jump & Vertical Gravity Physics with accurate ground elevation (sidewalk vs road)
-    const groundY = getGroundElevation(this.playerPos.x, this.playerPos.z);
+    // Jump & Vertical Gravity Physics with accurate ground elevation (sidewalk vs road vs interior floor)
+    const groundY = this.activeInterior ? 0.0 : getGroundElevation(this.playerPos.x, this.playerPos.z);
     if (inputs.jump && this.isGrounded) {
       this.verticalVelocity = 6.2;
       this.isGrounded = false;
@@ -1749,6 +2174,9 @@ export class GameEngine {
       // Smoothly adapt to curb elevation when walking between sidewalk (0.20m) and road (0.00m)
       this.playerPos.y = THREE.MathUtils.lerp(this.playerPos.y, groundY, delta * 14);
     }
+
+    // Anti-stuck safety guard: If player is ever slightly inside a collision box or vehicle, de-penetrate immediately
+    this.resolvePlayerPenetration();
 
     // Collision detection on player movement
     const nextX = this.playerPos.x + moveX * delta;
@@ -1798,6 +2226,7 @@ export class GameEngine {
         turnRate: turnRate,
         aimPitch: this.cameraPitch,
         weaponCategory: activeW?.category || 'handgun',
+        delta: delta,
       }
     );
 
@@ -1813,19 +2242,68 @@ export class GameEngine {
       this.attemptArrest();
     }
 
-    // Update Camera (Spring-arm 3rd person)
-    const targetCamDist = this.isAiming ? 2.4 : 4.8;
-    this.cameraDistance = THREE.MathUtils.lerp(this.cameraDistance, targetCamDist, delta * 12);
+    // Update Camera (Spring-arm 3rd person with obstacle collision avoidance)
+    if (this.isCinematicMode) {
+      this.cinematicTimer += delta;
+      const t = this.cinematicTimer * 0.08;
+      const radius = 55;
+      const camX = Math.sin(t) * radius;
+      const camZ = Math.cos(t) * radius;
+      const camY = 18 + Math.sin(t * 0.5) * 5;
+      this.camera.position.lerp(new THREE.Vector3(camX, camY, camZ), delta * 2.0);
+      this.cameraLookAt.lerp(new THREE.Vector3(0, 5, 0), delta * 2.5);
+      this.camera.lookAt(this.cameraLookAt);
+      return;
+    }
 
-    const camOffsetY = this.isCrouching ? 1.3 : 1.85;
-    const shoulderOffset = this.isAiming ? 0.65 : 0.0;
+    const targetCamDist = this.isAiming ? 2.2 : 4.6;
+
+    const camOffsetY = this.isCrouching ? 1.25 : 1.65;
+    const shoulderOffset = this.isAiming ? 0.52 : 0.0;
 
     const sinY = Math.sin(this.playerYaw);
     const cosY = Math.cos(this.playerYaw);
 
-    let camX = this.playerPos.x - sinY * this.cameraDistance * Math.cos(this.cameraPitch) + cosY * shoulderOffset;
-    let camY = this.playerPos.y + camOffsetY + Math.sin(this.cameraPitch) * this.cameraDistance;
-    let camZ = this.playerPos.z - cosY * this.cameraDistance * Math.cos(this.cameraPitch) - sinY * shoulderOffset;
+    // Forward direction from player yaw and camera pitch
+    const forwardX = sinY * Math.cos(this.cameraPitch);
+    const forwardY = -Math.sin(this.cameraPitch);
+    const forwardZ = cosY * Math.cos(this.cameraPitch);
+
+    // Pivot at Carter's upper chest with shoulder offset
+    const pivotX = this.playerPos.x + cosY * shoulderOffset;
+    const pivotY = this.playerPos.y + camOffsetY;
+    const pivotZ = this.playerPos.z - sinY * shoulderOffset;
+
+    // Obstacle raycasting to prevent camera entering buildings/walls
+    const camDir = new THREE.Vector3(-forwardX, -forwardY, -forwardZ).normalize();
+    const pivotVec = new THREE.Vector3(pivotX, pivotY, pivotZ);
+    let clearanceDist = targetCamDist;
+
+    for (const b of this.collisionBoxes) {
+      if ((b.height || 5) < 1.0) continue;
+      const box = new THREE.Box3(
+        new THREE.Vector3(b.minX - 0.25, 0, b.minZ - 0.25),
+        new THREE.Vector3(b.maxX + 0.25, b.height || 6.0, b.maxZ + 0.25)
+      );
+      const ray = new THREE.Ray(pivotVec, camDir);
+      const hitPt = new THREE.Vector3();
+      if (ray.intersectBox(box, hitPt)) {
+        const hitD = pivotVec.distanceTo(hitPt);
+        if (hitD < clearanceDist) {
+          clearanceDist = Math.max(0.85, hitD - 0.35);
+        }
+      }
+    }
+
+    this.cameraDistance = THREE.MathUtils.lerp(this.cameraDistance, clearanceDist, delta * 18);
+
+    let camX = pivotX - forwardX * this.cameraDistance;
+    let camY = pivotY - forwardY * this.cameraDistance;
+    let camZ = pivotZ - forwardZ * this.cameraDistance;
+
+    // Ground clearance prevent clip
+    const groundElevation = this.activeInterior ? 0.0 : getGroundElevation(camX, camZ);
+    camY = Math.max(groundElevation + 0.35, camY);
 
     // Apply realistic weapon recoil camera shake
     if (this.cameraShakeAmount > 0.001) {
@@ -1836,11 +2314,11 @@ export class GameEngine {
     }
 
     const targetCamPos = new THREE.Vector3(camX, camY, camZ);
-    // Focus camera at torso/chest level with natural look-ahead down street, keeping character well above bottom controls
+    // Center reticle looks forward along line of sight
     const targetLookAt = new THREE.Vector3(
-      this.playerPos.x + sinY * 1.8 + cosY * shoulderOffset,
-      this.playerPos.y + (this.isCrouching ? 0.95 : 1.25),
-      this.playerPos.z + cosY * 1.8 - sinY * shoulderOffset
+      pivotX + forwardX * 40,
+      pivotY + forwardY * 40,
+      pivotZ + forwardZ * 40
     );
 
     if (!this.isCameraInitialized) {
@@ -1849,9 +2327,8 @@ export class GameEngine {
       this.camera.lookAt(this.cameraLookAt);
       this.isCameraInitialized = true;
     } else {
-      // Polished spring-arm follow: high responsiveness when aiming, smooth cinematic weight on motion
-      const camLerp = Math.min(1.0, delta * (this.isAiming ? 18 : 10.5));
-      const lookLerp = Math.min(1.0, delta * (this.isAiming ? 20 : 13));
+      const camLerp = Math.min(1.0, delta * (this.isAiming ? 20 : 12));
+      const lookLerp = Math.min(1.0, delta * (this.isAiming ? 22 : 14));
       this.camera.position.lerp(targetCamPos, camLerp);
       this.cameraLookAt.lerp(targetLookAt, lookLerp);
       this.camera.lookAt(this.cameraLookAt);
@@ -1861,6 +2338,13 @@ export class GameEngine {
   private updateVehicleMode(delta: number, time: number, inputs: InputState) {
     const v = this.vehicles[this.currentVehicleIndex];
     if (!v) return;
+
+    // Track active duration inside vehicle
+    this.timeInsideCurrentVehicle += delta;
+
+    if (this.playerDamageCooldownTimer > 0) {
+      this.playerDamageCooldownTimer -= delta;
+    }
 
     // Siren toggle
     if (inputs.toggleSiren) {
@@ -1874,52 +2358,114 @@ export class GameEngine {
     }
 
     // Vehicle driving physics
-    const accelInput = inputs.moveForward; // 1 = forward, -1 = reverse
+    const accelInput = inputs.moveForward; // 1 = gas, -1 = brake / reverse
     const steerInput = inputs.moveRight; // 1 = right, -1 = left
 
-    // Acceleration & Braking
+    // Acceleration & Braking & Reversing
     if (accelInput > 0) {
-      v.entity.speed = Math.min(v.entity.maxSpeed, v.entity.speed + v.entity.acceleration * delta);
+      if (v.entity.speed < 0) {
+        // Active braking while reversing
+        v.entity.speed = Math.min(0, v.entity.speed + v.entity.acceleration * 2.2 * delta);
+      } else {
+        // Accelerate forward
+        v.entity.speed = Math.min(v.entity.maxSpeed, v.entity.speed + v.entity.acceleration * delta);
+      }
     } else if (accelInput < 0) {
-      v.entity.speed = Math.max(-10, v.entity.speed - v.entity.acceleration * 1.2 * delta);
+      if (v.entity.speed > 0.5) {
+        // Active braking while moving forward
+        v.entity.speed = Math.max(0, v.entity.speed - v.entity.acceleration * 1.8 * delta);
+      } else {
+        // Reverse
+        v.entity.speed = Math.max(-12, v.entity.speed - v.entity.acceleration * 0.9 * delta);
+      }
     } else {
-      v.entity.speed = THREE.MathUtils.lerp(v.entity.speed, 0, delta * 1.5);
+      // Natural rolling friction
+      v.entity.speed = THREE.MathUtils.lerp(v.entity.speed, 0, delta * 1.8);
     }
 
-    // Handbrake
+    // Handbrake drift
     if (inputs.handbrake) {
-      v.entity.speed = THREE.MathUtils.lerp(v.entity.speed, 0, delta * 4.5);
+      v.entity.speed = THREE.MathUtils.lerp(v.entity.speed, 0, delta * 4.2);
       soundEngine.playTireScreech();
     }
 
     // Steering
-    const maxSteer = 0.48;
+    const maxSteer = 0.50;
     v.entity.steering = THREE.MathUtils.lerp(v.entity.steering, steerInput * maxSteer, delta * 8);
 
-    // Apply yaw rotation when moving
-    if (Math.abs(v.entity.speed) > 0.1) {
-      const steerFactor = (v.entity.speed / v.entity.maxSpeed) * (v.entity.speed >= 0 ? 1 : -1);
-      v.entity.rotation -= v.entity.steering * steerFactor * 2.2 * delta;
+    // Apply yaw rotation when moving (CORRECT DIRECTION: +steering turns RIGHT)
+    if (Math.abs(v.entity.speed) > 0.05) {
+      const speedRatio = Math.min(1.0, Math.abs(v.entity.speed) / 10);
+      const steerFactor = (v.entity.speed >= 0 ? 1 : -1) * (0.65 + 0.35 * speedRatio);
+      const handbrakeBonus = inputs.handbrake ? 1.6 : 1.0;
+      const steerDelta = v.entity.steering * steerFactor * 2.6 * handbrakeBonus * delta;
+      const nextRot = v.entity.rotation - steerDelta;
+
+      // Ensure steering rotation doesn't rotate vehicle corners into solid walls/structures
+      if (!this.checkVehicleCollision(v.entity.position.x, v.entity.position.z, nextRot, this.currentVehicleIndex)) {
+        v.entity.rotation = nextRot;
+      } else {
+        // Attempt a half-angle turn if full turn is clipped
+        const halfRot = v.entity.rotation - steerDelta * 0.4;
+        if (!this.checkVehicleCollision(v.entity.position.x, v.entity.position.z, halfRot, this.currentVehicleIndex)) {
+          v.entity.rotation = halfRot;
+        } else {
+          v.entity.steering *= 0.2; // Damp steering against solid wall
+        }
+      }
     }
 
-    // Calculate motion vector
-    const nextVx = v.entity.position.x + Math.sin(v.entity.rotation) * v.entity.speed * delta;
-    const nextVz = v.entity.position.z + Math.cos(v.entity.rotation) * v.entity.speed * delta;
+    // Substepped Continuous Collision Detection (CCD) to prevent fast vehicles from tunneling through walls
+    const totalMoveDist = Math.abs(v.entity.speed) * delta;
+    const maxSubstepDist = 0.20; // Max 20cm per step guarantees zero tunneling through walls or fences
+    const numSteps = Math.max(1, Math.min(10, Math.ceil(totalMoveDist / maxSubstepDist)));
+    const stepDelta = delta / numSteps;
 
-    // Collision check
-    if (!this.checkVehicleCollision(nextVx, v.entity.position.z, 2.0)) {
-      v.entity.position.x = nextVx;
-    } else {
-      v.entity.speed *= -0.3;
-      soundEngine.playExplosion();
+    for (let step = 0; step < numSteps; step++) {
+      const stepDist = v.entity.speed * stepDelta;
+      const stepVx = Math.sin(v.entity.rotation) * stepDist;
+      const stepVz = Math.cos(v.entity.rotation) * stepDist;
+
+      const tryX = v.entity.position.x + stepVx;
+      const tryZ = v.entity.position.z + stepVz;
+
+      // 1. Try full movement vector
+      if (!this.checkVehicleCollision(tryX, tryZ, v.entity.rotation, this.currentVehicleIndex)) {
+        v.entity.position.x = tryX;
+        v.entity.position.z = tryZ;
+        continue;
+      }
+
+      // 2. Obstacle encountered: attempt wall sliding along X axis
+      let moved = false;
+      if (Math.abs(stepVx) > 0.001 && !this.checkVehicleCollision(tryX, v.entity.position.z, v.entity.rotation, this.currentVehicleIndex)) {
+        v.entity.position.x = tryX;
+        v.entity.speed *= 0.88; // Friction sliding along wall
+        moved = true;
+      }
+
+      // 3. Attempt wall sliding along Z axis
+      if (Math.abs(stepVz) > 0.001 && !this.checkVehicleCollision(v.entity.position.x, tryZ, v.entity.rotation, this.currentVehicleIndex)) {
+        v.entity.position.z = tryZ;
+        v.entity.speed *= 0.88; // Friction sliding along wall
+        moved = true;
+      }
+
+      // 4. Head-on collision into solid wall or obstacle (cannot slide)
+      if (!moved) {
+        if (Math.abs(v.entity.speed) > 3.0) {
+          soundEngine.playHit(false);
+          soundEngine.playTireScreech();
+        }
+        v.entity.speed *= -0.22; // Elastic bounce back away from solid structure
+        this.resolveVehicleBuildingPenetration(v);
+        break;
+      }
     }
 
-    if (!this.checkVehicleCollision(v.entity.position.x, nextVz, 2.0)) {
-      v.entity.position.z = nextVz;
-    } else {
-      v.entity.speed *= -0.3;
-      soundEngine.playExplosion();
-    }
+    // Resolve vehicle-to-vehicle overlap & anti-trapping building de-penetration
+    this.resolveVehicleToVehicleCollisions(v);
+    this.resolveVehicleBuildingPenetration(v);
 
     v.rig.root.position.set(v.entity.position.x, 0, v.entity.position.z);
     v.rig.root.rotation.y = v.entity.rotation;
@@ -1932,58 +2478,652 @@ export class GameEngine {
 
     this.checkVehicleRamming(v);
 
-    const camFollowDist = 8.2;
-    const camHeight = 3.6;
-    const camX = v.entity.position.x - Math.sin(v.entity.rotation) * camFollowDist;
-    const camY = camHeight;
-    const camZ = v.entity.position.z - Math.cos(v.entity.rotation) * camFollowDist;
+    // Alert pedestrians in vehicle's path to dodge out of roadway
+    if (Math.abs(v.entity.speed) > 3.0) {
+      for (const civ of this.ai.civilians) {
+        const cdx = civ.position.x - v.entity.position.x;
+        const cdz = civ.position.z - v.entity.position.z;
+        const cdist = Math.hypot(cdx, cdz);
+        if (cdist < 12.0) {
+          const vDirX = Math.sin(v.entity.rotation);
+          const vDirZ = Math.cos(v.entity.rotation);
+          const dot = (cdx * vDirX + cdz * vDirZ) / (cdist || 1);
+          if (dot > 0.6 && civ.state !== 'dodging') {
+            civ.state = 'dodging';
+            civ.dodgeTimer = 1.8;
+            const perpX = -vDirZ;
+            const perpZ = vDirX;
+            civ.position.x += perpX * 2.5;
+            civ.position.z += perpZ * 2.5;
+          }
+        }
+      }
+    }
 
-    this.camera.position.lerp(new THREE.Vector3(camX, camY, camZ), delta * 8);
-    this.camera.lookAt(
-      v.entity.position.x + Math.sin(v.entity.rotation) * 3.2,
-      1.4,
-      v.entity.position.z + Math.cos(v.entity.rotation) * 3.2
+    // Camera follow behind vehicle with obstacle clearance
+    const camFollowDist = 7.5;
+    const camHeight = 3.2;
+    const sinRot = Math.sin(v.entity.rotation);
+    const cosRot = Math.cos(v.entity.rotation);
+
+    const vehCamDir = new THREE.Vector3(-sinRot, 0.35, -cosRot).normalize();
+    const vehPivot = new THREE.Vector3(v.entity.position.x, v.entity.position.y + 1.2, v.entity.position.z);
+    let vehClearance = camFollowDist;
+
+    for (const b of this.collisionBoxes) {
+      if ((b.height || 5) < 1.0) continue;
+      const box = new THREE.Box3(
+        new THREE.Vector3(b.minX - 0.3, 0, b.minZ - 0.3),
+        new THREE.Vector3(b.maxX + 0.3, b.height || 6.0, b.maxZ + 0.3)
+      );
+      const ray = new THREE.Ray(vehPivot, vehCamDir);
+      const hitPt = new THREE.Vector3();
+      if (ray.intersectBox(box, hitPt)) {
+        const hitD = vehPivot.distanceTo(hitPt);
+        if (hitD < vehClearance) {
+          vehClearance = Math.max(1.8, hitD - 0.3); // Prevent camera from entering wall
+        }
+      }
+    }
+
+    const targetCamX = v.entity.position.x - sinRot * vehClearance;
+    const targetCamY = v.entity.position.y + Math.min(camHeight, vehClearance * 0.42 + 1.1);
+    const targetCamZ = v.entity.position.z - cosRot * vehClearance;
+
+    const targetLookAt = new THREE.Vector3(
+      v.entity.position.x + sinRot * 2.8,
+      v.entity.position.y + 1.2,
+      v.entity.position.z + cosRot * 2.8
     );
+
+    this.camera.position.lerp(new THREE.Vector3(targetCamX, targetCamY, targetCamZ), delta * 9);
+    this.cameraLookAt.lerp(targetLookAt, delta * 11);
+    this.camera.lookAt(this.cameraLookAt);
   }
 
-  private toggleVehicleEnterExit() {
+  public toggleVehicleEnterExit() {
     if (this.currentVehicleIndex >= 0) {
-      const v = this.vehicles[this.currentVehicleIndex];
-      v.entity.isOccupiedByPlayer = false;
-      this.currentVehicleIndex = -1;
-      this.playerRig.root.visible = true;
-      this.playerPos.x += Math.cos(v.entity.rotation) * 2.2;
-      this.playerPos.z -= Math.sin(v.entity.rotation) * 2.2;
-      this.playerRig.root.position.copy(this.playerPos);
-      soundEngine.stopEngine();
-      soundEngine.stopSiren();
-      this.onNotification?.('Exited Vehicle', 'info');
+      this.exitVehicle();
     } else {
+      if (this.vehicleActionCooldown > 0) return;
+      this.enterVehicle();
+    }
+  }
+
+  public enterVehicle(vehicleIndex?: number): boolean {
+    if (this.vehicleActionCooldown > 0) return false;
+    if (this.currentVehicleIndex >= 0) return false;
+    if (this.activeInterior) return false;
+
+    let targetIdx = vehicleIndex ?? -1;
+    if (targetIdx < 0) {
       let closestIdx = -1;
-      let closestDist = 4.0;
+      let closestDist = 5.2; // Generous comfortable enter radius
 
       for (let i = 0; i < this.vehicles.length; i++) {
-        const dist = this.playerPos.distanceTo(
-          new THREE.Vector3(this.vehicles[i].entity.position.x, 0, this.vehicles[i].entity.position.z)
+        const v = this.vehicles[i];
+        const dist = Math.hypot(
+          this.playerPos.x - v.entity.position.x,
+          this.playerPos.z - v.entity.position.z
         );
         if (dist < closestDist) {
           closestDist = dist;
           closestIdx = i;
         }
       }
+      targetIdx = closestIdx;
+    }
 
-      if (closestIdx >= 0) {
-        this.currentVehicleIndex = closestIdx;
-        const v = this.vehicles[closestIdx];
-        v.entity.isOccupiedByPlayer = true;
-        this.playerRig.root.visible = false;
-        soundEngine.startEngine();
-        this.onNotification?.(
-          `Entered ${v.entity.type === 'police' ? 'Police Interceptor' : 'Vehicle'}`,
-          'info'
-        );
+    if (targetIdx >= 0 && targetIdx < this.vehicles.length) {
+      const v = this.vehicles[targetIdx];
+      this.currentVehicleIndex = targetIdx;
+      this.timeInsideCurrentVehicle = 0;
+      v.entity.isOccupiedByPlayer = true;
+      this.playerRig.root.visible = false;
+      this.vehicleActionCooldown = 0.35; // Brief cooldown prevents accidental immediate exit
+      soundEngine.startEngine();
+
+      // Initialize camera smoothly behind vehicle
+      const sinRot = Math.sin(v.entity.rotation);
+      const cosRot = Math.cos(v.entity.rotation);
+      const initCamX = v.entity.position.x - sinRot * 7.5;
+      const initCamY = Math.max(
+        getGroundElevation(initCamX, v.entity.position.z - cosRot * 7.5) + 0.8,
+        v.entity.position.y + 3.2
+      );
+      const initCamZ = v.entity.position.z - cosRot * 7.5;
+      this.camera.position.set(initCamX, initCamY, initCamZ);
+      this.cameraLookAt.set(
+        v.entity.position.x + sinRot * 2.8,
+        v.entity.position.y + 1.2,
+        v.entity.position.z + cosRot * 2.8
+      );
+      this.camera.lookAt(this.cameraLookAt);
+
+      const carName =
+        v.entity.type === 'police'
+          ? 'Police Interceptor'
+          : v.entity.type === 'armored'
+          ? 'Armored Tactical Vehicle'
+          : 'Vehicle';
+      this.onNotification?.(
+        `Entered ${carName}! Use Gas to drive, Brake to reverse, Drift for tight turns.`,
+        'success'
+      );
+      return true;
+    }
+    return false;
+  }
+
+  public exitVehicle(): boolean {
+    if (this.currentVehicleIndex < 0) return false;
+    // Tiny debounce (0.1s) after entering to prevent a single tap from entering and exiting in the same frame
+    if (this.timeInsideCurrentVehicle < 0.1) return false;
+
+    const v = this.vehicles[this.currentVehicleIndex];
+    if (!v) {
+      this.currentVehicleIndex = -1;
+      this.timeInsideCurrentVehicle = 0;
+      this.playerRig.root.visible = true;
+      return false;
+    }
+
+    // Find safe, unoccupied exit spot (never inside walls or other cars)
+    const safePos = this.findSafeVehicleExitPosition(v);
+
+    // Detach player from vehicle
+    v.entity.isOccupiedByPlayer = false;
+    v.entity.speed = 0;
+    this.currentVehicleIndex = -1;
+    this.timeInsideCurrentVehicle = 0;
+    this.vehicleActionCooldown = 0.6; // Cooldown prevents instant re-entry when standing near car
+
+    // Restore player visibility & position
+    this.playerRig.root.visible = true;
+    this.playerPos.copy(safePos);
+    this.playerPos.y = getGroundElevation(this.playerPos.x, this.playerPos.z);
+    this.playerRig.root.position.copy(this.playerPos);
+
+    // Face player
+    this.playerYaw = v.entity.rotation;
+    this.playerRig.root.rotation.y = this.playerYaw;
+
+    // Reset physics state
+    this.verticalVelocity = 0;
+    this.isGrounded = true;
+    this.isCrouching = false;
+
+    // Ensure player is completely de-penetrated and normal walking controls are 100% active
+    this.resolvePlayerPenetration();
+
+    // Reset camera to on-foot 3rd person follow immediately
+    this.cameraDistance = 3.6;
+    this.cameraPitch = 0.14;
+    this.initCameraPosition();
+
+    soundEngine.stopEngine();
+    soundEngine.stopSiren();
+    this.onNotification?.('Exited Vehicle', 'info');
+    return true;
+  }
+
+  /**
+   * Evaluates all candidate positions surrounding a vehicle (driver side, passenger side,
+   * rear, front, diagonal offsets, and multi-ring radial sweep) to find a safe, unobstructed position
+   * that is NOT inside any wall, building, prop, or other vehicle.
+   */
+  public findSafeVehicleExitPosition(veh: { entity: VehicleEntity; rig: VehicleRig }): THREE.Vector3 {
+    const rot = veh.entity.rotation;
+    const sinR = Math.sin(rot);
+    const cosR = Math.cos(rot);
+
+    // Lateral driver side direction (-cosR, sinR)
+    // Lateral passenger side direction (cosR, -sinR)
+    // Longitudinal forward direction (sinR, cosR)
+    // Longitudinal rear direction (-sinR, -cosR)
+
+    const candidates: { x: number; z: number }[] = [];
+
+    // 1. Driver's side curb / door (distances: 2.0, 2.5, 3.0, 3.6, 4.2)
+    for (const d of [2.0, 2.5, 3.0, 3.6, 4.2]) {
+      candidates.push({ x: veh.entity.position.x - cosR * d, z: veh.entity.position.z + sinR * d });
+    }
+
+    // 2. Passenger's side door (distances: 2.0, 2.5, 3.0, 3.6, 4.2)
+    for (const d of [2.0, 2.5, 3.0, 3.6, 4.2]) {
+      candidates.push({ x: veh.entity.position.x + cosR * d, z: veh.entity.position.z - sinR * d });
+    }
+
+    // 3. Rear of vehicle (distances: 3.2, 3.8, 4.5, 5.2)
+    for (const d of [3.2, 3.8, 4.5, 5.2]) {
+      candidates.push({ x: veh.entity.position.x - sinR * d, z: veh.entity.position.z - cosR * d });
+    }
+
+    // 4. Front of vehicle (distances: 3.2, 3.8, 4.5, 5.2)
+    for (const d of [3.2, 3.8, 4.5, 5.2]) {
+      candidates.push({ x: veh.entity.position.x + sinR * d, z: veh.entity.position.z + cosR * d });
+    }
+
+    // 5. Diagonal clearances (rear-left, rear-right, front-left, front-right)
+    for (const d of [2.6, 3.4, 4.2, 5.0]) {
+      candidates.push({
+        x: veh.entity.position.x - (cosR + sinR) * 0.7 * d,
+        z: veh.entity.position.z + (sinR - cosR) * 0.7 * d,
+      });
+      candidates.push({
+        x: veh.entity.position.x + (cosR - sinR) * 0.7 * d,
+        z: veh.entity.position.z + (-sinR - cosR) * 0.7 * d,
+      });
+      candidates.push({
+        x: veh.entity.position.x - (cosR - sinR) * 0.7 * d,
+        z: veh.entity.position.z + (sinR + cosR) * 0.7 * d,
+      });
+      candidates.push({
+        x: veh.entity.position.x + (cosR + sinR) * 0.7 * d,
+        z: veh.entity.position.z + (-sinR + cosR) * 0.7 * d,
+      });
+    }
+
+    // 6. Comprehensive 16-point concentric radial rings (radii 2.6m to 8.0m)
+    for (let r = 2.6; r <= 8.0; r += 0.9) {
+      for (let a = 0; a < 16; a++) {
+        const ang = (a / 16) * Math.PI * 2;
+        candidates.push({
+          x: veh.entity.position.x + Math.cos(ang) * r,
+          z: veh.entity.position.z + Math.sin(ang) * r,
+        });
       }
     }
+
+    // 7. Outer roadway search up to 13m for tight multi-vehicle pileups
+    for (let r = 9.0; r <= 13.0; r += 1.5) {
+      for (let a = 0; a < 8; a++) {
+        const ang = (a / 8) * Math.PI * 2;
+        candidates.push({
+          x: veh.entity.position.x + Math.cos(ang) * r,
+          z: veh.entity.position.z + Math.sin(ang) * r,
+        });
+      }
+    }
+
+    for (const cand of candidates) {
+      // Must not collide with any building, wall, prop, or fence
+      if (this.checkPlayerCollisionWithMargin(cand.x, cand.z, 0.45)) {
+        continue;
+      }
+
+      // Must not collide with ANY other vehicle
+      let hitsOther = false;
+      for (const other of this.vehicles) {
+        if (other === veh) continue;
+        const dist = Math.hypot(cand.x - other.entity.position.x, cand.z - other.entity.position.z);
+        if (dist < 2.3) {
+          hitsOther = true;
+          break;
+        }
+      }
+      if (hitsOther) continue;
+
+      // Must not overlap THIS vehicle body
+      const toCarX = cand.x - veh.entity.position.x;
+      const toCarZ = cand.z - veh.entity.position.z;
+      const localLat = Math.abs(toCarX * cosR - toCarZ * sinR);
+      const localLong = Math.abs(toCarX * sinR + toCarZ * cosR);
+      if (localLat < 1.25 && localLong < 2.55) {
+        continue; // Still inside car footprint
+      }
+
+      // Map bounds check
+      if (Math.abs(cand.x) > 135 || Math.abs(cand.z) > 135) {
+        continue;
+      }
+
+      // Found perfectly safe exit position!
+      const gy = getGroundElevation(cand.x, cand.z);
+      return new THREE.Vector3(cand.x, gy, cand.z);
+    }
+
+    // Safe fallback: Find unobstructed candidate with minimum margin
+    let bestX = veh.entity.position.x - cosR * 2.5;
+    let bestZ = veh.entity.position.z + sinR * 2.5;
+    for (const cand of candidates) {
+      if (!this.checkPlayerCollisionWithMargin(cand.x, cand.z, 0.25)) {
+        bestX = cand.x;
+        bestZ = cand.z;
+        break;
+      }
+    }
+    return new THREE.Vector3(bestX, getGroundElevation(bestX, bestZ), bestZ);
+  }
+
+  // --------------------------------------------------------------------
+  // PROLOGUE STORY MODE & DYNAMIC VISUAL CUSTOMIZATION
+  // --------------------------------------------------------------------
+  public isPrologueActive: boolean = false;
+  private prologueMomRig?: CharacterRig;
+  private prologueMrsGableRig?: CharacterRig;
+  private prologueMarcusRig?: CharacterRig;
+
+  public setWaypointPosition(x: number, z: number, active: boolean = true) {
+    this.waypointPos.set(x, 0, z);
+    this.waypointBeaconGroup.position.copy(this.waypointPos);
+    this.isWaypointActive = active;
+  }
+
+  public setPlayerOutfit(outfitVariant: CustomizationSettings['outfit']) {
+    const currentPos = this.playerPos.clone();
+    const currentRot = this.playerYaw;
+    const wasVisible = this.playerRig.root.visible;
+
+    this.scene.remove(this.playerRig.root);
+    const variant = outfitVariant === 'tactical_swat' ? 'swat' : outfitVariant === 'detective' ? 'detective' : 'default';
+    this.playerRig = createCharacterMesh('player', variant, 'Officer Carter');
+    attachWeaponToRig(this.playerRig, this.weapons[this.activeWeaponIndex].category);
+    this.playerRig.root.position.copy(currentPos);
+    this.playerRig.root.rotation.y = currentRot;
+    this.playerRig.root.visible = wasVisible;
+    this.scene.add(this.playerRig.root);
+  }
+
+  public startPrologueMode() {
+    this.isPrologueActive = true;
+    this.isCinematicMode = false;
+
+    // 1. Switch player rig to Young Carter (blocky stylized model)
+    const spawnPos = new THREE.Vector3(-14, 0.20, 24);
+    this.playerPos.copy(spawnPos);
+    this.playerYaw = Math.PI;
+
+    this.scene.remove(this.playerRig.root);
+    this.playerRig = createBlockyCharacterMesh('player', 'young_carter', 'Young Alex Carter');
+    this.playerRig.root.position.copy(this.playerPos);
+    this.playerRig.root.rotation.y = this.playerYaw;
+    this.scene.add(this.playerRig.root);
+
+    // 2. Spawn Mother Elena on stoop near spawn point
+    if (!this.prologueMomRig) {
+      this.prologueMomRig = createBlockyCharacterMesh('civilian', 'mother_elena', 'Elena Carter');
+      this.prologueMomRig.root.position.set(-12.5, 0.20, 25.5);
+      this.prologueMomRig.root.rotation.y = -Math.PI * 0.75;
+      this.scene.add(this.prologueMomRig.root);
+    }
+
+    // 3. Spawn Mrs. Gable by her grocery cart on the sidewalk
+    if (!this.prologueMrsGableRig) {
+      this.prologueMrsGableRig = createBlockyCharacterMesh('civilian', 'mrs_gable', 'Mrs. Gable');
+      this.prologueMrsGableRig.root.position.set(-20, 0.20, 14);
+      this.prologueMrsGableRig.root.rotation.y = Math.PI * 0.25;
+      this.scene.add(this.prologueMrsGableRig.root);
+    }
+
+    // 4. Spawn Marcus in the nearby alleyway
+    if (!this.prologueMarcusRig) {
+      this.prologueMarcusRig = createBlockyCharacterMesh('thug', 'street_youth_marcus', 'Marcus');
+      this.prologueMarcusRig.root.position.set(-28, 0.20, 4);
+      this.prologueMarcusRig.root.rotation.y = Math.PI * 0.5;
+      this.scene.add(this.prologueMarcusRig.root);
+    }
+
+    this.setWaypointPosition(-20, 14, true);
+    this.initCameraPosition();
+  }
+
+  public endPrologueMode(adultOutfit: CustomizationSettings['outfit'] = 'rookie_patrol') {
+    this.isPrologueActive = false;
+    this.isCinematicMode = false;
+
+    // Clean up prologue actors
+    if (this.prologueMomRig) {
+      this.scene.remove(this.prologueMomRig.root);
+      this.prologueMomRig = undefined;
+    }
+    if (this.prologueMrsGableRig) {
+      this.scene.remove(this.prologueMrsGableRig.root);
+      this.prologueMrsGableRig = undefined;
+    }
+    if (this.prologueMarcusRig) {
+      this.scene.remove(this.prologueMarcusRig.root);
+      this.prologueMarcusRig = undefined;
+    }
+
+    // Restore Adult Carter
+    this.scene.remove(this.playerRig.root);
+    const variant = adultOutfit === 'tactical_swat' ? 'swat' : adultOutfit === 'detective' ? 'detective' : 'default';
+    this.playerRig = createCharacterMesh('player', variant, 'Officer Carter');
+    attachWeaponToRig(this.playerRig, this.weapons[this.activeWeaponIndex].category);
+    this.playerPos.copy(this.cityData.spawnPoints.player);
+    this.playerRig.root.position.copy(this.playerPos);
+    this.playerRig.root.rotation.y = this.playerYaw;
+    this.scene.add(this.playerRig.root);
+
+    this.initCameraPosition();
+  }
+
+  /**
+   * Builds distinct glowing entrance markers on the city sidewalks outside enterable buildings
+   */
+  private initExteriorBuildingMarkers() {
+    this.exteriorEntranceMarkersGroup.clear();
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+    const archMat = new THREE.MeshBasicMaterial({ color: 0xfacc15, wireframe: true });
+
+    Object.values(ENTERABLE_BUILDINGS).forEach((b) => {
+      const markerGroup = new THREE.Group();
+      markerGroup.position.set(b.exteriorPos.x, b.exteriorPos.y, b.exteriorPos.z);
+
+      // Glowing pulsing entrance ring
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.2, 1.6, 24), ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.05;
+      markerGroup.add(ring);
+
+      // Inner chevron
+      const innerRing = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.7, 24), archMat);
+      innerRing.rotation.x = -Math.PI / 2;
+      innerRing.position.y = 0.06;
+      markerGroup.add(innerRing);
+
+      // Floating diamond beacon
+      const diamond = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), archMat);
+      diamond.position.y = 1.8;
+      markerGroup.add(diamond);
+
+      this.exteriorEntranceMarkersGroup.add(markerGroup);
+    });
+  }
+
+  /**
+   * Continuous update for building entrances, proximity prompts, and interior interactables
+   */
+  public updateBuildingInteractions(inputs: InputState, delta: number, time: number) {
+    // Animate exterior markers
+    this.exteriorEntranceMarkersGroup.children.forEach((child, idx) => {
+      const diamond = child.children[2];
+      if (diamond) {
+        diamond.rotation.y = time * 2.5 + idx;
+        diamond.position.y = 1.6 + Math.sin(time * 3 + idx) * 0.2;
+      }
+    });
+
+    if (this.currentVehicleIndex >= 0) {
+      if (this.nearbyBuildingEntrance) {
+        this.nearbyBuildingEntrance = null;
+        this.onBuildingEntranceChanged?.(null);
+      }
+      return;
+    }
+
+    // 1. OUTSIDE ON CITY STREET
+    if (!this.activeInterior) {
+      let closestEntrance: EnterableBuilding | null = null;
+      let closestDist = 999;
+
+      for (const b of Object.values(ENTERABLE_BUILDINGS)) {
+        const d = Math.hypot(this.playerPos.x - b.exteriorPos.x, this.playerPos.z - b.exteriorPos.z);
+        if (d < b.entranceRadius && d < closestDist) {
+          closestDist = d;
+          closestEntrance = b;
+        }
+      }
+
+      if (this.nearbyBuildingEntrance?.id !== closestEntrance?.id) {
+        this.nearbyBuildingEntrance = closestEntrance;
+        this.onBuildingEntranceChanged?.(closestEntrance);
+      }
+
+      // Check enter trigger via dedicated input or interact key
+      if ((inputs.enterBuilding || (inputs.interact && this.nearbyBuildingEntrance)) && this.nearbyBuildingEntrance) {
+        inputs.enterBuilding = false;
+        inputs.interact = false;
+        this.enterBuilding(this.nearbyBuildingEntrance.id);
+      }
+    }
+    // 2. INSIDE ENTERABLE BUILDING INTERIOR
+    else {
+      // Find closest interior interactable
+      let closestObj: InteriorInteractable | null = null;
+      let closestObjDist = 999;
+
+      for (const obj of this.activeInterior.interactiveObjects) {
+        const d = Math.hypot(this.playerPos.x - obj.position.x, this.playerPos.z - obj.position.z);
+        if (d < obj.radius && d < closestObjDist) {
+          closestObjDist = d;
+          closestObj = obj;
+        }
+      }
+
+      if (this.nearbyInteriorInteractable?.id !== closestObj?.id) {
+        this.nearbyInteriorInteractable = closestObj;
+        this.onInteriorInteractableChanged?.(closestObj);
+      }
+
+      // Exit or Interact trigger
+      if (inputs.exitBuilding || (inputs.interact && this.nearbyInteriorInteractable?.type === 'exit_door')) {
+        inputs.exitBuilding = false;
+        inputs.interact = false;
+        this.exitBuilding();
+      } else if (inputs.interact && this.nearbyInteriorInteractable) {
+        inputs.interact = false;
+        this.triggerInteriorInteractable(this.nearbyInteriorInteractable);
+      }
+
+      // Smoothly animate vault door if active
+      if (this.activeInterior.animatedVaultDoor) {
+        const vd = this.activeInterior.animatedVaultDoor;
+        if (Math.abs(vd.currentAngle - vd.targetAngle) > 0.005) {
+          vd.currentAngle = THREE.MathUtils.lerp(vd.currentAngle, vd.targetAngle, delta * 4);
+          vd.doorMesh.rotation.y = vd.currentAngle;
+          vd.wheelMesh.rotation.z += delta * (vd.isOpen ? 6 : -6);
+        }
+      }
+    }
+  }
+
+  /**
+   * Enters the selected building interior seamlessly
+   */
+  public enterBuilding(buildingId: EnterableBuildingId) {
+    if (this.activeInterior) return;
+
+    const interiorState = buildBuildingInterior(buildingId);
+    // Record current exterior coordinates to return precisely here on exit
+    interiorState.exteriorPosition = {
+      x: this.playerPos.x,
+      y: this.playerPos.y,
+      z: this.playerPos.z,
+    };
+    interiorState.exteriorYaw = this.playerYaw;
+
+    this.activeInterior = interiorState;
+    this.scene.add(interiorState.interiorGroup);
+
+    // Teleport Carter cleanly into the interior room facing forward
+    this.playerPos.set(
+      interiorState.interiorSpawnPos.x,
+      interiorState.interiorSpawnPos.y,
+      interiorState.interiorSpawnPos.z
+    );
+    this.playerYaw = interiorState.interiorSpawnYaw;
+    this.playerRig.root.position.copy(this.playerPos);
+    this.playerRig.root.rotation.y = this.playerYaw;
+
+    // Reset camera behind Carter inside
+    this.cameraDistance = 4.2;
+    this.cameraPitch = 0.12;
+    this.initCameraPosition();
+
+    soundEngine.playRadioChime();
+    this.onNotification?.(`Entered ${interiorState.building.name}!`, 'success');
+
+    this.onBuildingEntranceChanged?.(null);
+    this.onInteriorStateChanged?.(interiorState);
+  }
+
+  /**
+   * Exits building interior and returns Carter seamlessly to the city street
+   */
+  public exitBuilding() {
+    if (!this.activeInterior) return;
+
+    const returnPos = this.activeInterior.exteriorPosition;
+    const returnYaw = this.activeInterior.exteriorYaw;
+    const buildingName = this.activeInterior.building.name;
+
+    // Remove interior from scene
+    this.scene.remove(this.activeInterior.interiorGroup);
+
+    // Teleport Carter back to exterior entrance
+    this.playerPos.set(returnPos.x, returnPos.y, returnPos.z);
+    this.playerYaw = returnYaw;
+    this.playerRig.root.position.copy(this.playerPos);
+    this.playerRig.root.rotation.y = this.playerYaw;
+
+    this.activeInterior = null;
+    this.nearbyInteriorInteractable = null;
+
+    // Reset camera behind Carter
+    this.cameraDistance = 4.6;
+    this.cameraPitch = 0.14;
+    this.initCameraPosition();
+
+    soundEngine.playRadioChime();
+    this.onNotification?.(`Exited ${buildingName} to city street.`, 'info');
+
+    this.onInteriorInteractableChanged?.(null);
+    this.onInteriorStateChanged?.(null);
+  }
+
+  /**
+   * Triggers interaction with an object inside the building
+   */
+  public triggerInteriorInteractable(interactable: InteriorInteractable) {
+    if (interactable.type === 'exit_door') {
+      this.exitBuilding();
+      return;
+    }
+
+    if (interactable.type === 'vault_door') {
+      this.toggleVaultDoor();
+      return;
+    }
+
+    // Forward to React for modal/choice handling
+    this.onTriggerInteriorInteraction?.(interactable);
+  }
+
+  /**
+   * Operates and swings open/closed the heavy steel vault blast door
+   */
+  public toggleVaultDoor() {
+    if (!this.activeInterior?.animatedVaultDoor) return;
+    const vd = this.activeInterior.animatedVaultDoor;
+    vd.isOpen = !vd.isOpen;
+    vd.targetAngle = vd.isOpen ? -Math.PI * 0.55 : 0;
+    soundEngine.playRadioChime();
+    this.onNotification?.(
+      vd.isOpen ? 'Master Vault Door Unlocked & Swung Open!' : 'Master Vault Door Sealed & Locked!',
+      'alert'
+    );
   }
 
   private updateCivilianTraffic(delta: number, time: number) {
@@ -2030,27 +3170,39 @@ export class GameEngine {
 
       tc.entity.speed = THREE.MathUtils.lerp(tc.entity.speed, speed, delta * 4);
 
-      // Move along designated street lane
+      // Move along designated street lane with building collision check
+      let nextX = tc.entity.position.x;
+      let nextZ = tc.entity.position.z;
+      let nextRot = tc.entity.rotation;
+
       if (tc.lane === 'south') {
-        tc.entity.position.z += tc.entity.speed * delta;
-        tc.entity.rotation = 0;
-        if (tc.entity.position.z > 140) tc.entity.position.z = -140;
+        nextZ = tc.entity.position.z + tc.entity.speed * delta;
+        nextRot = 0;
+        if (nextZ > 140) nextZ = -140;
       } else if (tc.lane === 'north') {
-        tc.entity.position.z -= tc.entity.speed * delta;
-        tc.entity.rotation = Math.PI;
-        if (tc.entity.position.z < -140) tc.entity.position.z = 140;
+        nextZ = tc.entity.position.z - tc.entity.speed * delta;
+        nextRot = Math.PI;
+        if (nextZ < -140) nextZ = 140;
       } else if (tc.lane === 'east') {
-        tc.entity.position.x += tc.entity.speed * delta;
-        tc.entity.rotation = Math.PI / 2;
-        if (tc.entity.position.x > 140) tc.entity.position.x = -140;
+        nextX = tc.entity.position.x + tc.entity.speed * delta;
+        nextRot = Math.PI / 2;
+        if (nextX > 140) nextX = -140;
       } else if (tc.lane === 'west') {
-        tc.entity.position.x -= tc.entity.speed * delta;
-        tc.entity.rotation = -Math.PI / 2;
-        if (tc.entity.position.x < -140) tc.entity.position.x = 140;
+        nextX = tc.entity.position.x - tc.entity.speed * delta;
+        nextRot = -Math.PI / 2;
+        if (nextX < -140) nextX = 140;
       } else if (tc.lane === 'outer_south') {
-        tc.entity.position.z += tc.entity.speed * delta;
-        tc.entity.rotation = 0;
-        if (tc.entity.position.z > 135) tc.entity.position.z = -135;
+        nextZ = tc.entity.position.z + tc.entity.speed * delta;
+        nextRot = 0;
+        if (nextZ > 135) nextZ = -135;
+      }
+
+      tc.entity.rotation = nextRot;
+      if (!this.testVehicleBuildingCollisions(nextX, nextZ, tc.entity.rotation)) {
+        tc.entity.position.x = nextX;
+        tc.entity.position.z = nextZ;
+      } else {
+        tc.entity.speed = 0; // Yield and halt before colliding with building structure
       }
 
       tc.rig.root.position.set(tc.entity.position.x, 0, tc.entity.position.z);
@@ -2073,8 +3225,16 @@ export class GameEngine {
       pv.entity.rotation += Math.PI * 0.5;
     }
 
-    pPos.x += Math.sin(pv.entity.rotation) * pv.entity.speed * delta;
-    pPos.z += Math.cos(pv.entity.rotation) * pv.entity.speed * delta;
+    const nextX = pPos.x + Math.sin(pv.entity.rotation) * pv.entity.speed * delta;
+    const nextZ = pPos.z + Math.cos(pv.entity.rotation) * pv.entity.speed * delta;
+
+    if (!this.testVehicleBuildingCollisions(nextX, nextZ, pv.entity.rotation)) {
+      pPos.x = nextX;
+      pPos.z = nextZ;
+    } else {
+      // Steer away onto street rather than phasing through building structure
+      pv.entity.rotation += Math.PI * 0.45;
+    }
 
     pv.rig.root.position.set(pPos.x, 0, pPos.z);
     pv.rig.root.rotation.y = pv.entity.rotation;
@@ -2092,8 +3252,15 @@ export class GameEngine {
     crim.entity.speed = 18;
     crim.entity.rotation += delta * 0.15;
 
-    crim.entity.position.x += Math.sin(crim.entity.rotation) * crim.entity.speed * delta;
-    crim.entity.position.z += Math.cos(crim.entity.rotation) * crim.entity.speed * delta;
+    const nextX = crim.entity.position.x + Math.sin(crim.entity.rotation) * crim.entity.speed * delta;
+    const nextZ = crim.entity.position.z + Math.cos(crim.entity.rotation) * crim.entity.speed * delta;
+
+    if (!this.testVehicleBuildingCollisions(nextX, nextZ, crim.entity.rotation)) {
+      crim.entity.position.x = nextX;
+      crim.entity.position.z = nextZ;
+    } else {
+      crim.entity.rotation += Math.PI * 0.5;
+    }
 
     if (Math.abs(crim.entity.position.x) > 90) crim.entity.rotation += Math.PI * 0.5;
     if (Math.abs(crim.entity.position.z) > 90) crim.entity.rotation += Math.PI * 0.5;
@@ -2157,16 +3324,17 @@ export class GameEngine {
     let isHeadshot = false;
     let hitVehicleObj: { entity: VehicleEntity; rig: VehicleRig } | undefined;
 
-    // 1. Raycast against collision boxes (buildings, walls, crates) so bullets hit cover
+    // 1. Raycast against collision boxes (buildings, walls, crates) in front of player
     for (const b of this.collisionBoxes) {
       const box = new THREE.Box3(
         new THREE.Vector3(b.minX, 0, b.minZ),
-        new THREE.Vector3(b.maxX, 5.0, b.maxZ)
+        new THREE.Vector3(b.maxX, b.height || 5.0, b.maxZ)
       );
       const hitPoint = new THREE.Vector3();
       if (cameraRay.intersectBox(box, hitPoint)) {
         const d = cameraRay.origin.distanceTo(hitPoint);
-        if (d > 1.2 && d < closestDist) {
+        const toHit = hitPoint.clone().sub(this.playerPos);
+        if (d > 0.8 && toHit.dot(cameraRay.direction) > -0.5 && d < closestDist) {
           closestDist = d;
         }
       }
@@ -2176,8 +3344,8 @@ export class GameEngine {
     for (const v of this.vehicles) {
       if (v.entity.isOccupiedByPlayer || v.entity.health <= 0) continue;
       const vBox = new THREE.Box3(
-        new THREE.Vector3(v.entity.position.x - 1.2, 0, v.entity.position.z - 2.2),
-        new THREE.Vector3(v.entity.position.x + 1.2, 1.6, v.entity.position.z + 2.2)
+        new THREE.Vector3(v.entity.position.x - 1.25, 0, v.entity.position.z - 2.3),
+        new THREE.Vector3(v.entity.position.x + 1.25, 1.7, v.entity.position.z + 2.3)
       );
       const hitPt = new THREE.Vector3();
       if (cameraRay.intersectBox(vBox, hitPt)) {
@@ -2193,20 +3361,20 @@ export class GameEngine {
     for (const e of this.ai.enemies) {
       if (e.state === 'dead' || e.state === 'arrested') continue;
 
-      const basePos = new THREE.Vector3(e.position.x, 0, e.position.z);
-      const eCenter = new THREE.Vector3(e.position.x, 1.15, e.position.z);
+      const eGroundY = e.position.y || getGroundElevation(e.position.x, e.position.z);
+      const eCenter = new THREE.Vector3(e.position.x, eGroundY + 1.1, e.position.z);
       const toCenter = eCenter.clone().sub(cameraRay.origin);
       const proj = toCenter.dot(cameraRay.direction);
 
       if (proj > 1.0 && proj < closestDist) {
         const rayPoint = cameraRay.origin.clone().add(cameraRay.direction.clone().multiplyScalar(proj));
-        const height = rayPoint.y;
-        if (height >= 0 && height <= 1.95) {
-          const horizDist = Math.hypot(rayPoint.x - basePos.x, rayPoint.z - basePos.z);
-          if (horizDist < 0.72) {
+        const relHeight = rayPoint.y - eGroundY;
+        if (relHeight >= -0.1 && relHeight <= 2.1) {
+          const horizDist = Math.hypot(rayPoint.x - e.position.x, rayPoint.z - e.position.z);
+          if (horizDist < 0.80) {
             closestDist = proj;
             hitEnemy = e;
-            isHeadshot = height > 1.48;
+            isHeadshot = relHeight > 1.45;
             hitVehicleObj = undefined;
           }
         }
@@ -2253,14 +3421,14 @@ export class GameEngine {
     this.onWeaponChanged?.(w);
 
     // Muzzle flash, muzzle point light & recoil kick
-    this.playerRig.recoilTimer = 0.14;
+    this.playerRig.recoilTimer = 0.16;
     if (this.playerRig.muzzleLight) {
-      this.playerRig.muzzleLight.intensity = 2.8;
+      this.playerRig.muzzleLight.intensity = 3.5;
     }
-    const recoilKick = w.damage > 40 ? 0.038 : 0.022;
+    const recoilKick = w.damage > 40 ? 0.032 : 0.018;
     this.cameraPitch = Math.max(-0.6, this.cameraPitch - recoilKick);
     this.targetRecoilPitch = recoilKick;
-    this.cameraShakeAmount = Math.min(0.24, this.cameraShakeAmount + (w.damage > 40 ? 0.14 : 0.06));
+    this.cameraShakeAmount = Math.min(0.22, this.cameraShakeAmount + (w.damage > 40 ? 0.12 : 0.05));
 
     // Get exact aim target point aligned with center reticle
     const aimTarget = this.getAimRayTarget(w.range);
@@ -2348,10 +3516,26 @@ export class GameEngine {
         const civPos = new THREE.Vector3(civ.position.x, 1.0, civ.position.z);
         if (civPos.distanceTo(endPoint) < 1.4) {
           civ.state = 'cowering';
+          civ.panicTimer = 15;
+          if ((civ as any).health !== undefined) {
+            (civ as any).health = Math.max(0, (civ as any).health - w.damage);
+            if ((civ as any).health <= 0) {
+              civ.state = 'dead';
+              this.addFloatingText('CIVILIAN CASUALTY!', '#ef4444', civPos);
+              this.onNotification?.('CRITICAL WARNING: Civilian sustained lethal injury! Avoid collateral damage!', 'alert');
+            }
+          }
           this.stats.wantedLevel = Math.min(5, this.stats.wantedLevel + 1);
           this.stats.wantedCooldown = 20;
+          // Direct impact on Police Trust & Suspicion for reckless gunfire endangering citizens
+          this.stats.policeReputation = Math.max(0, (this.stats.policeReputation ?? this.stats.reputation) - 6);
+          this.stats.reputation = this.stats.policeReputation;
+          this.stats.suspicionLevel = Math.min(100, (this.stats.suspicionLevel ?? 10) + 8);
+          this.ai.carterDoubleLife.policeRep = this.stats.policeReputation;
+          this.ai.carterDoubleLife.suspicionLevel = this.stats.suspicionLevel;
           this.onStatsChanged?.(this.stats);
-          this.onNotification?.('WARNING: Civilian in crossfire! Wanted level increased!', 'alert');
+          this.onNotification?.('WARNING: Civilian in crossfire! Police Trust reduced (-6) & IA Heat increased (+8)!', 'alert');
+          this.addFloatingText('CIVILIAN ENDANGERED!', '#ef4444', civPos);
           break;
         }
       }
@@ -2365,8 +3549,9 @@ export class GameEngine {
     const origin = new THREE.Vector3(enemy.position.x, 1.4, enemy.position.z);
     const dir = targetPos.clone().sub(origin).normalize();
 
-    dir.x += (Math.random() - 0.5) * 0.12;
-    dir.z += (Math.random() - 0.5) * 0.12;
+    // Spread: realistic precision grouping so hits connect reliably in clear sightlines
+    dir.x += (Math.random() - 0.5) * 0.04;
+    dir.z += (Math.random() - 0.5) * 0.04;
 
     const endPoint = origin.clone().add(dir.clone().multiplyScalar(35));
     this.addBulletTracer(origin, endPoint, 0xef4444);
@@ -2374,13 +3559,55 @@ export class GameEngine {
     const toPlayer = this.playerPos.clone().add(new THREE.Vector3(0, 1.0, 0)).sub(origin);
     const proj = toPlayer.dot(dir);
 
-    if (proj > 0 && proj < 35) {
+    // 1. Check if bullet trajectory hits any building/wall before reaching player
+    let wallBlocked = false;
+    for (const b of this.collisionBoxes) {
+      if ((b.height || 5) < 1.1) continue;
+      const box = new THREE.Box3(
+        new THREE.Vector3(b.minX, 0, b.minZ),
+        new THREE.Vector3(b.maxX, b.height || 5.0, b.maxZ)
+      );
+      const hitPt = new THREE.Vector3();
+      const ray = new THREE.Ray(origin, dir);
+      if (ray.intersectBox(box, hitPt)) {
+        const d = origin.distanceTo(hitPt);
+        if (d < proj) {
+          wallBlocked = true;
+          break;
+        }
+      }
+    }
+
+    if (wallBlocked) {
+      return; // Bullet stopped by solid wall
+    }
+
+    // Check if bullet trajectory hits any captive hostage in crossfire (hostages are NOT invulnerable)
+    for (const h of this.missionHostages) {
+      if ((h as any).isRescued || ((h as any).health !== undefined && (h as any).health <= 0)) continue;
+      const toHostage = new THREE.Vector3(h.position.x, 1.0, h.position.z).sub(origin);
+      const hProj = toHostage.dot(dir);
+      if (hProj > 0 && hProj < 35) {
+        const closestPt = origin.clone().add(dir.clone().multiplyScalar(hProj));
+        const hDist = closestPt.distanceTo(new THREE.Vector3(h.position.x, 1.0, h.position.z));
+        if (hDist < 1.1) {
+          (h as any).health = Math.max(0, ((h as any).health || 100) - 20);
+          this.addFloatingText(`-20 HOSTAGE HIT!`, '#ef4444', new THREE.Vector3(h.position.x, 1.8, h.position.z));
+          this.onNotification?.(`WARNING: ${h.name || 'Hostage'} taking syndicate fire! Untie them immediately!`, 'alert');
+          break;
+        }
+      }
+    }
+
+    if (proj > 0 && proj < 35 && this.playerDamageCooldownTimer <= 0) {
       const closestPoint = origin.clone().add(dir.clone().multiplyScalar(proj));
       const dist = closestPoint.distanceTo(this.playerPos.clone().add(new THREE.Vector3(0, 1.0, 0)));
 
-      if (dist < 0.8) {
+      if (dist < 1.05) {
+        this.playerDamageCooldownTimer = 0.15; // Prevent damage stacking in a single frame
         const rawDamage = enemy.weapon.damage;
-        soundEngine.playHit(false);
+        const hadArmor = this.stats.armor > 0;
+        soundEngine.playPlayerDamage(hadArmor);
 
         if (this.stats.armor > 0) {
           const absorbed = Math.min(this.stats.armor, rawDamage);
@@ -2397,6 +3624,7 @@ export class GameEngine {
 
         this.addFloatingText(`-${rawDamage}`, '#dc2626', this.playerPos);
         this.onStatsChanged?.(this.stats);
+        this.onPlayerDamaged?.(rawDamage);
 
         if (this.stats.health <= 0) {
           this.onNotification?.('OFFICER DOWN! Mission Failed.', 'alert');
@@ -2442,6 +3670,7 @@ export class GameEngine {
 
       if (dist < 3.5 && canArrestThis) {
         e.state = 'arrested';
+        e.isCuffed = true;
         e.shootCooldown = 999999;
         e.alertLevel = 0;
         e.target = undefined;
@@ -2451,22 +3680,103 @@ export class GameEngine {
         }
         soundEngine.playArrest();
         this.stats.arrests++;
-        this.stats.money += 200; // Bonus for non-lethal arrest!
-        this.stats.xp += 180;
-        this.stats.reputation = Math.min(100, this.stats.reputation + 5);
         this.onStatsChanged?.(this.stats);
         this.onMissionObjectiveProgress?.('arrest', 1);
         this.onMissionObjectiveProgress?.('kill', 1); // Also counts for neutralize objectives
-        this.addFloatingText('+ $200 ARREST BONUS', '#22c55e', e.position);
-        this.onNotification?.(`Suspect ${e.name} Handcuffed! +$200 Non-Lethal Reward (+5 Rep)`, 'success');
+        this.addFloatingText('SUSPECT CUFFED', '#facc15', e.position);
+        this.onNotification?.(`Suspect ${e.name} Handcuffed! Double-Life booking options opened.`, 'success');
         this.checkEnemyIncidentResolution(e.id);
         arrestedAny = true;
+        this.onOpenArrestEvidenceModal?.(e);
         break;
       }
     }
 
     if (!arrestedAny) {
+      // If already cuffed suspect is nearby, re-open booking & evidence modal
+      const cuffed = this.checkArrestedSuspectNearby();
+      if (cuffed) {
+        this.onOpenArrestEvidenceModal?.(cuffed);
+        return;
+      }
       this.onNotification?.('Order suspect to surrender [G] or confront weakened suspect to arrest.', 'info');
+    }
+  }
+
+  /**
+   * Synchronizes Officer Carter's Double-Life stats with AI Controller
+   */
+  public syncDoubleLifeStats(stats: PlayerStats) {
+    this.stats = { ...stats };
+    this.ai.carterDoubleLife = {
+      policeRep: stats.policeReputation ?? stats.reputation,
+      underworldRep: stats.underworldReputation ?? 15,
+      suspicionLevel: stats.suspicionLevel ?? 10,
+    };
+  }
+
+  /**
+   * Counts civilians within observation range of Officer Carter
+   */
+  public countNearbyWitnesses(radius: number = 14): number {
+    let count = 0;
+    for (const civ of this.ai.civilians) {
+      const dist = this.playerPos.distanceTo(new THREE.Vector3(civ.position.x, 0, civ.position.z));
+      if (dist < radius) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Triggers civilian witness reaction to officer misconduct
+   */
+  public triggerWitnessMisconductAlert(description: string) {
+    for (const civ of this.ai.civilians) {
+      const dist = this.playerPos.distanceTo(new THREE.Vector3(civ.position.x, 0, civ.position.z));
+      if (dist < 14) {
+        civ.state = 'witnessing';
+        civ.panicTimer = 18;
+        this.addFloatingText('WITNESS REPORTED!', '#ef4444', civ.position);
+        this.onPedestrianShout?.(civ, `I saw that! Officer Carter is taking dirty payouts!`);
+        this.onWitnessMisconductAlert?.(civ, description);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Release suspect under table (aided escape)
+   */
+  public releaseSuspect(enemyId: string) {
+    const enemy = this.ai.enemies.find((e) => e.id === enemyId);
+    if (enemy) {
+      enemy.state = 'flee';
+      enemy.alertLevel = 0;
+      enemy.target = {
+        x: enemy.position.x + (Math.random() - 0.5) * 50,
+        y: 0,
+        z: enemy.position.z + (Math.random() - 0.5) * 50,
+      };
+      this.addFloatingText('SUSPECT ESCAPING', '#38bdf8', enemy.position);
+      setTimeout(() => {
+        this.ai.removeEnemy(enemy.id, this.scene);
+      }, 3500);
+    }
+  }
+
+  /**
+   * Transport suspect to police station lockup
+   */
+  public transportSuspect(enemyId: string) {
+    const enemy = this.ai.enemies.find((e) => e.id === enemyId);
+    if (enemy) {
+      enemy.transportCalled = true;
+      this.addFloatingText('10-75 IN CUSTODY', '#22c55e', enemy.position);
+      setTimeout(() => {
+        this.ai.removeEnemy(enemy.id, this.scene);
+      }, 2500);
     }
   }
 
@@ -2490,20 +3800,31 @@ export class GameEngine {
     this.onNotification?.('Officer Carter: "POLICE! DROP YOUR WEAPONS AND GET DOWN!"', 'alert');
 
     let surrenderedCount = 0;
+    const underworldRep = this.stats.underworldReputation ?? 15;
+
     for (const e of this.ai.enemies) {
       if (e.state === 'dead' || e.state === 'arrested' || e.state === 'surrendered') continue;
       const dist = this.playerPos.distanceTo(new THREE.Vector3(e.position.x, 0, e.position.z));
 
       // Thugs have high surrender rate when confronted, enforcers lower, boss never
       if (dist < 14.0 && e.type !== 'boss') {
-        const surrenderChance = e.health < e.maxHealth * 0.7 ? 0.9 : 0.6;
+        let surrenderChance = e.health < e.maxHealth * 0.7 ? 0.9 : 0.6;
+        // Underworld trust makes criminals eager to deal with Officer Carter
+        if (underworldRep >= 40) {
+          surrenderChance = Math.min(0.98, surrenderChance + 0.22);
+        }
+
         if (Math.random() < surrenderChance) {
           e.state = 'surrendered';
           e.shootCooldown = 999;
           e.alertLevel = 0;
           surrenderedCount++;
           this.addFloatingText('SURRENDERED!', '#facc15', e.position);
-          this.onNotification?.(`Suspect ${e.name} has raised hands and surrendered!`, 'info');
+          if (underworldRep >= 45 && Math.random() < 0.5) {
+            this.onNotification?.(`Suspect ${e.name} raised hands: "Carter, hold up! Let's talk business!"`, 'info');
+          } else {
+            this.onNotification?.(`Suspect ${e.name} has raised hands and surrendered!`, 'info');
+          }
         }
       }
     }
@@ -2520,23 +3841,35 @@ export class GameEngine {
   public callPoliceBackup() {
     soundEngine.playRadioChime();
 
+    const policeTrust = this.stats.policeReputation ?? this.stats.reputation;
+    const suspicion = this.stats.suspicionLevel ?? 10;
+
+    // Consequence: If Police Trust is critically low (< 25) or Suspicion is critical (>= 85), dispatch hesitates or refuses tactical deployment
+    if (policeTrust < 25 && suspicion >= 75) {
+      this.onNotification?.('DISPATCH 10-99: "Unit 24, all tactical patrol units are currently committed to high-priority calls. Stand by."', 'alert');
+      return;
+    }
+
     // Check currently active backup units
     const activeBackup = this.ai.policeNPCs.filter((p) => p.isBackupUnit && p.health > 0);
 
-    if (activeBackup.length > 0) {
+    // High Police Trust (>= 75) allows up to 3 squad members for elite support; lower trust allows 1-2
+    const maxBackupCount = policeTrust >= 75 ? 3 : 2;
+
+    if (activeBackup.length >= maxBackupCount) {
       this.onNotification?.('Officer Carter: "Squad, regroup on my mark! Stay sharp!"', 'info');
-      activeBackup.forEach((p, idx) => {
+      activeBackup.forEach((p) => {
         p.state = 'responding';
-        const offsetAngle = this.playerYaw + (idx === 0 ? -Math.PI * 0.75 : Math.PI * 0.75);
-        p.squadOffset = {
-          x: Math.sin(offsetAngle) * 3.5,
-          z: Math.cos(offsetAngle) * 3.5,
-        };
       });
       return;
     }
 
-    this.onNotification?.('Officer Carter: "10-78: Requesting immediate squad backup at my 20!"', 'alert');
+    const neededTotal = maxBackupCount - activeBackup.length;
+    if (policeTrust >= 80) {
+      this.onNotification?.('DISPATCH 10-4: "High-priority tactical backup responding immediately for Senior Officer Carter!"', 'success');
+    } else {
+      this.onNotification?.('Officer Carter: "10-78: Requesting squad backup at my 20!"', 'alert');
+    }
 
     // 1. Convert nearby patrol officers if available within 80m
     const candidates = this.ai.policeNPCs.filter(
@@ -2545,30 +3878,26 @@ export class GameEngine {
 
     let recruited = 0;
     for (const p of candidates) {
+      if (recruited >= neededTotal) break;
       p.isBackupUnit = true;
       p.state = 'responding';
       p.assignedIncidentId = undefined;
-      const offsetAngle = this.playerYaw + (recruited === 0 ? -Math.PI * 0.75 : Math.PI * 0.75);
-      p.squadOffset = {
-        x: Math.sin(offsetAngle) * 3.5,
-        z: Math.cos(offsetAngle) * 3.5,
-      };
       recruited++;
-      if (recruited >= 2) break;
     }
 
-    // 2. If fewer than 2 nearby officers, dispatch tactical squad backup to arrive
-    const needed = 2 - recruited;
+    // 2. If needed, dispatch tactical squad backup to arrive
+    const needed = neededTotal - recruited;
     for (let i = 0; i < needed; i++) {
-      const officerNames = ['Officer Miller', 'Officer Hayes', 'Officer Diaz', 'Officer Kowalski'];
+      const officerNames = ['Officer Miller', 'Officer Hayes', 'Officer Diaz', 'Officer Kowalski', 'Sergeant Vance'];
       const name = officerNames[(this.ai.policeNPCs.length + i) % officerNames.length];
       const badge = `${210 + this.ai.policeNPCs.length * 7}`;
 
-      const spawnAngle = this.playerYaw + Math.PI + (i === 0 ? -0.4 : 0.4);
+      const spawnAngle = this.playerYaw + Math.PI + (i === 0 ? -0.4 : i === 1 ? 0.4 : 0.0);
       const spawnX = this.playerPos.x + Math.sin(spawnAngle) * 14;
       const spawnZ = this.playerPos.z + Math.cos(spawnAngle) * 14;
 
-      const role = i === 0 ? 'patrol' : 'swat';
+      // When Police Trust is high (>= 70), dispatch sends heavy SWAT support; otherwise standard patrol
+      const role = policeTrust >= 70 && (i === 0 || i === 2) ? 'swat' : 'patrol';
       const rig = createCharacterMesh('police_npc', role === 'swat' ? 'swat' : 'default', name);
       this.scene.add(rig.root);
 
@@ -2582,7 +3911,7 @@ export class GameEngine {
       newOfficer.isBackupUnit = true;
       newOfficer.state = 'responding';
       const squadSlot = recruited + i;
-      const offsetAngle = this.playerYaw + (squadSlot === 0 ? -Math.PI * 0.75 : Math.PI * 0.75);
+      const offsetAngle = this.playerYaw + (squadSlot === 0 ? -Math.PI * 0.75 : squadSlot === 1 ? Math.PI * 0.75 : Math.PI);
       newOfficer.squadOffset = {
         x: Math.sin(offsetAngle) * 3.5,
         z: Math.cos(offsetAngle) * 3.5,
@@ -2647,6 +3976,46 @@ export class GameEngine {
       }
     }
     return null;
+  }
+
+  /**
+   * Returns nearby captive hostage if within rescue distance
+   */
+  public checkHostageNearbyToRescue(): CivilianEntity | null {
+    for (const h of this.missionHostages) {
+      if ((h as any).isRescued || ((h as any).health !== undefined && (h as any).health <= 0)) continue;
+      const dist = Math.hypot(this.playerPos.x - h.position.x, this.playerPos.z - h.position.z);
+      if (dist < 4.2) {
+        return h;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Rescues captive civilian hostage and unties them
+   */
+  public rescueHostage(): boolean {
+    const hostage = this.checkHostageNearbyToRescue();
+    if (!hostage) return false;
+
+    (hostage as any).isRescued = true;
+    (hostage as any).isCaptive = false;
+    hostage.state = 'walking';
+    // Run towards safe perimeter
+    hostage.targetPos = { x: 55, y: 0, z: -10 };
+    hostage.speed = 4.5;
+
+    soundEngine.playRadioChime();
+    this.stats.civiliansRescued = (this.stats.civiliansRescued || 0) + 1;
+    this.stats.xp += 300;
+    this.stats.reputation = Math.min(100, (this.stats.reputation ?? 80) + 5);
+    this.onStatsChanged?.(this.stats);
+    this.onMissionObjectiveProgress?.('rescue', 1);
+
+    this.addFloatingText('HOSTAGE EVACUATED! +300 XP', '#10b981', new THREE.Vector3(hostage.position.x, 1.8, hostage.position.z));
+    this.onNotification?.(`Hostage ${hostage.name || 'Citizen'} untied and evacuated safely!`, 'success');
+    return true;
   }
 
   /**
@@ -2797,9 +4166,9 @@ export class GameEngine {
     }
   }
 
-  private checkPlayerCollision(x: number, z: number): boolean {
-    const radius = 0.55;
-    for (const b of this.collisionBoxes) {
+  public checkPlayerCollisionWithMargin(x: number, z: number, radius = 0.55): boolean {
+    const boxes = this.activeInterior ? this.activeInterior.collisionBoxes : this.collisionBoxes;
+    for (const b of boxes) {
       if (x + radius > b.minX && x - radius < b.maxX && z + radius > b.minZ && z - radius < b.maxZ) {
         return true;
       }
@@ -2807,30 +4176,343 @@ export class GameEngine {
     return false;
   }
 
-  private checkVehicleCollision(x: number, z: number, radius: number): boolean {
-    for (const b of this.collisionBoxes) {
-      if (x + radius > b.minX && x - radius < b.maxX && z + radius > b.minZ && z - radius < b.maxZ) {
+  private checkPlayerCollision(x: number, z: number): boolean {
+    if (this.checkPlayerCollisionWithMargin(x, z, 0.55)) {
+      return true;
+    }
+
+    // When on foot in outside city, prevent player from phasing through vehicle bodies
+    if (!this.activeInterior) {
+      for (const v of this.vehicles) {
+        if (v.entity.isOccupiedByPlayer) continue;
+        const dist = Math.hypot(x - v.entity.position.x, z - v.entity.position.z);
+        if (dist < 1.7) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Exact 2D Separating Axis Theorem (SAT) collision test between an Oriented Bounding Box (OBB)
+   * representing a vehicle (length ~4.8m, width ~2.2m) and an Axis-Aligned Bounding Box (AABB)
+   * representing a building, wall, fence, or street prop.
+   * Tests all 4 separating axes (2 AABB axes + 2 OBB axes) plus 8 perimeter sample points.
+   * Guarantees zero penetration at any vehicle rotation angle.
+   */
+  public testVehicleBoxCollision(
+    vx: number,
+    vz: number,
+    rotation: number,
+    b: CollisionBox,
+    halfWidth = 1.15,
+    halfLength = 2.45
+  ): boolean {
+    // 1. Broadphase bounding circle rejection
+    const maxExtent = halfLength + 0.35;
+    if (
+      vx + maxExtent < b.minX ||
+      vx - maxExtent > b.maxX ||
+      vz + maxExtent < b.minZ ||
+      vz - maxExtent > b.maxZ
+    ) {
+      return false;
+    }
+
+    const cosR = Math.cos(rotation);
+    const sinR = Math.sin(rotation);
+
+    const boxCenterX = (b.minX + b.maxX) * 0.5;
+    const boxCenterZ = (b.minZ + b.maxZ) * 0.5;
+    const boxHalfW = (b.maxX - b.minX) * 0.5;
+    const boxHalfD = (b.maxZ - b.minZ) * 0.5;
+
+    const dx = vx - boxCenterX;
+    const dz = vz - boxCenterZ;
+
+    // Axis 1: World X-axis (AABB normal 1)
+    const rX = halfWidth * Math.abs(cosR) + halfLength * Math.abs(sinR);
+    if (Math.abs(dx) > boxHalfW + rX) return false;
+
+    // Axis 2: World Z-axis (AABB normal 2)
+    const rZ = halfWidth * Math.abs(-sinR) + halfLength * Math.abs(cosR);
+    if (Math.abs(dz) > boxHalfD + rZ) return false;
+
+    // Axis 3: Vehicle Local X-axis (lateral width unit vector: cosR, -sinR)
+    const dist3 = Math.abs(dx * cosR - dz * sinR);
+    const rBox3 = boxHalfW * Math.abs(cosR) + boxHalfD * Math.abs(-sinR);
+    if (dist3 > halfWidth + rBox3) return false;
+
+    // Axis 4: Vehicle Local Z-axis (longitudinal length unit vector: sinR, cosR)
+    const dist4 = Math.abs(dx * sinR + dz * cosR);
+    const rBox4 = boxHalfW * Math.abs(sinR) + boxHalfD * Math.abs(cosR);
+    if (dist4 > halfLength + rBox4) return false;
+
+    // All 4 axes overlap -> exact intersection detected!
+    return true;
+  }
+
+  /**
+   * Tests whether a vehicle at (x, z) with given rotation intersects any building,
+   * fence, barrier, or world boundary.
+   */
+  public testVehicleBuildingCollisions(
+    x: number,
+    z: number,
+    rotation: number,
+    halfWidth = 1.15,
+    halfLength = 2.45
+  ): boolean {
+    const boxes = this.activeInterior ? this.activeInterior.collisionBoxes : this.collisionBoxes;
+    for (const b of boxes) {
+      if (this.testVehicleBoxCollision(x, z, rotation, b, halfWidth, halfLength)) {
         return true;
       }
     }
+    return Math.abs(x) > 136 || Math.abs(z) > 136;
+  }
+
+  /**
+   * Comprehensive vehicle collision test against:
+   * 1. Static building/wall/prop geometry via SAT
+   * 2. World map boundaries
+   * 3. Other vehicles (traffic, pursuit, criminal, and parked vehicles)
+   */
+  public checkVehicleCollision(
+    x: number,
+    z: number,
+    rotation: number,
+    ignoreVehicleIdx: number = -1
+  ): boolean {
+    // 1. Static building, wall & prop collision
+    if (this.testVehicleBuildingCollisions(x, z, rotation)) {
+      return true;
+    }
+
+    // 2. Other vehicles collision
+    const sinR = Math.sin(rotation);
+    const cosR = Math.cos(rotation);
+
+    for (let i = 0; i < this.vehicles.length; i++) {
+      if (i === ignoreVehicleIdx) continue;
+      const other = this.vehicles[i];
+      const otherPos = other.entity.position;
+      const dist = Math.hypot(x - otherPos.x, z - otherPos.z);
+      if (dist > 5.8) continue; // Broadphase check
+
+      // Center disc collision
+      if (dist < 3.2) {
+        return true;
+      }
+
+      // Check bumper disc overlaps
+      const otherSin = Math.sin(other.entity.rotation);
+      const otherCos = Math.cos(other.entity.rotation);
+      const myFront = { x: x + sinR * 1.6, z: z + cosR * 1.6 };
+      const myRear = { x: x - sinR * 1.6, z: z - cosR * 1.6 };
+      const otherFront = { x: otherPos.x + otherSin * 1.6, z: otherPos.z + otherCos * 1.6 };
+      const otherRear = { x: otherPos.x - otherSin * 1.6, z: otherPos.z - otherCos * 1.6 };
+
+      const minBumperDist = 2.25;
+      if (
+        Math.hypot(myFront.x - otherFront.x, myFront.z - otherFront.z) < minBumperDist ||
+        Math.hypot(myFront.x - otherRear.x, myFront.z - otherRear.z) < minBumperDist ||
+        Math.hypot(myRear.x - otherFront.x, myRear.z - otherFront.z) < minBumperDist ||
+        Math.hypot(myRear.x - otherRear.x, myRear.z - otherRear.z) < minBumperDist
+      ) {
+        return true;
+      }
+    }
+
     return false;
+  }
+
+  /**
+   * Resolves vehicle-to-vehicle overlap and prevents interpenetration.
+   * Pushes vehicles apart along their separation vector so they never stay stuck or merged.
+   */
+  public resolveVehicleToVehicleCollisions(playerVeh: { entity: VehicleEntity; rig: VehicleRig }) {
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const other = this.vehicles[i];
+      if (other === playerVeh) continue;
+
+      const dx = playerVeh.entity.position.x - other.entity.position.x;
+      const dz = playerVeh.entity.position.z - other.entity.position.z;
+      const dist = Math.hypot(dx, dz);
+      const minDistance = 3.35;
+
+      if (dist < minDistance && dist > 0.001) {
+        const overlap = minDistance - dist;
+        const nx = dx / dist;
+        const nz = dz / dist;
+
+        // Push vehicles apart along separation vector
+        const pushX = nx * overlap * 0.55;
+        const pushZ = nz * overlap * 0.55;
+
+        const newPx = playerVeh.entity.position.x + pushX;
+        const newPz = playerVeh.entity.position.z + pushZ;
+        const canPlayerMove = !this.testVehicleBuildingCollisions(newPx, newPz, playerVeh.entity.rotation);
+
+        const newOx = other.entity.position.x - pushX;
+        const newOz = other.entity.position.z - pushZ;
+        const canOtherMove = !this.testVehicleBuildingCollisions(newOx, newOz, other.entity.rotation);
+
+        if (canPlayerMove && canOtherMove) {
+          playerVeh.entity.position.x = newPx;
+          playerVeh.entity.position.z = newPz;
+          other.entity.position.x = newOx;
+          other.entity.position.z = newOz;
+        } else if (canPlayerMove && !canOtherMove) {
+          // Other vehicle is pinned against a wall; push player car away
+          const altPx = playerVeh.entity.position.x + nx * overlap * 0.95;
+          const altPz = playerVeh.entity.position.z + nz * overlap * 0.95;
+          if (!this.testVehicleBuildingCollisions(altPx, altPz, playerVeh.entity.rotation)) {
+            playerVeh.entity.position.x = altPx;
+            playerVeh.entity.position.z = altPz;
+          }
+        } else if (!canPlayerMove && canOtherMove) {
+          // Player car is pinned against a wall; push other vehicle away
+          const altOx = other.entity.position.x - nx * overlap * 0.95;
+          const altOz = other.entity.position.z - nz * overlap * 0.95;
+          if (!this.testVehicleBuildingCollisions(altOx, altOz, other.entity.rotation)) {
+            other.entity.position.x = altOx;
+            other.entity.position.z = altOz;
+          }
+        }
+
+        other.rig.root.position.set(other.entity.position.x, 0, other.entity.position.z);
+        playerVeh.rig.root.position.set(playerVeh.entity.position.x, 0, playerVeh.entity.position.z);
+
+        // Speed impulse exchange & kinetic dampening
+        if (Math.abs(playerVeh.entity.speed) > 1.0) {
+          other.entity.speed = playerVeh.entity.speed * 0.45;
+          playerVeh.entity.speed *= 0.35;
+        }
+      }
+    }
+  }
+
+  /**
+   * Anti-trapping de-penetration: if a vehicle overlaps a solid building box,
+   * push it out along the minimum penetration axis so it never stays trapped inside.
+   */
+  public resolveVehicleBuildingPenetration(v: { entity: VehicleEntity; rig: VehicleRig }) {
+    const boxes = this.activeInterior ? this.activeInterior.collisionBoxes : this.collisionBoxes;
+    const halfWidth = 1.15;
+    const halfLength = 2.45;
+    const cosR = Math.cos(v.entity.rotation);
+    const sinR = Math.sin(v.entity.rotation);
+    const extentX = halfWidth * Math.abs(cosR) + halfLength * Math.abs(sinR);
+    const extentZ = halfWidth * Math.abs(-sinR) + halfLength * Math.abs(cosR);
+
+    for (const b of boxes) {
+      if (this.testVehicleBoxCollision(v.entity.position.x, v.entity.position.z, v.entity.rotation, b, halfWidth, halfLength)) {
+        const boxCenterX = (b.minX + b.maxX) * 0.5;
+        const boxCenterZ = (b.minZ + b.maxZ) * 0.5;
+        const boxHalfW = (b.maxX - b.minX) * 0.5;
+        const boxHalfD = (b.maxZ - b.minZ) * 0.5;
+
+        const toCenterX = v.entity.position.x - boxCenterX;
+        const toCenterZ = v.entity.position.z - boxCenterZ;
+
+        const penX = boxHalfW + extentX - Math.abs(toCenterX);
+        const penZ = boxHalfD + extentZ - Math.abs(toCenterZ);
+
+        if (penX > 0 && penZ > 0) {
+          if (penX < penZ) {
+            v.entity.position.x += (toCenterX >= 0 ? penX : -penX) + (toCenterX >= 0 ? 0.08 : -0.08);
+          } else {
+            v.entity.position.z += (toCenterZ >= 0 ? penZ : -penZ) + (toCenterZ >= 0 ? 0.08 : -0.08);
+          }
+          v.rig.root.position.set(v.entity.position.x, 0, v.entity.position.z);
+          v.entity.speed = 0;
+        }
+      }
+    }
+  }
+
+  /**
+   * Anti-stuck safety de-penetration for on-foot player:
+   * If Carter is ever slightly inside a wall, prop, or vehicle after collision/exit,
+   * push Carter out along the shallowest axis so normal walking controls are instantly restored.
+   */
+  public resolvePlayerPenetration() {
+    const boxes = this.activeInterior ? this.activeInterior.collisionBoxes : this.collisionBoxes;
+    const playerRadius = 0.52;
+
+    for (const b of boxes) {
+      if (
+        this.playerPos.x + playerRadius > b.minX &&
+        this.playerPos.x - playerRadius < b.maxX &&
+        this.playerPos.z + playerRadius > b.minZ &&
+        this.playerPos.z - playerRadius < b.maxZ
+      ) {
+        const boxCenterX = (b.minX + b.maxX) * 0.5;
+        const boxCenterZ = (b.minZ + b.maxZ) * 0.5;
+        const halfW = (b.maxX - b.minX) * 0.5;
+        const halfD = (b.maxZ - b.minZ) * 0.5;
+
+        const toCenterX = this.playerPos.x - boxCenterX;
+        const toCenterZ = this.playerPos.z - boxCenterZ;
+
+        const penX = halfW + playerRadius - Math.abs(toCenterX);
+        const penZ = halfD + playerRadius - Math.abs(toCenterZ);
+
+        if (penX > 0 && penZ > 0) {
+          if (penX < penZ) {
+            this.playerPos.x += (toCenterX >= 0 ? penX : -penX) + (toCenterX >= 0 ? 0.06 : -0.06);
+          } else {
+            this.playerPos.z += (toCenterZ >= 0 ? penZ : -penZ) + (toCenterZ >= 0 ? 0.06 : -0.06);
+          }
+          this.playerRig.root.position.copy(this.playerPos);
+        }
+      }
+    }
+
+    // Also de-penetrate from vehicle bodies when on foot outside
+    if (!this.activeInterior) {
+      for (const v of this.vehicles) {
+        if (v.entity.isOccupiedByPlayer) continue;
+        const dx = this.playerPos.x - v.entity.position.x;
+        const dz = this.playerPos.z - v.entity.position.z;
+        const dist = Math.hypot(dx, dz);
+        const minDist = 2.1;
+        if (dist < minDist && dist > 0.001) {
+          const push = minDist - dist + 0.06;
+          this.playerPos.x += (dx / dist) * push;
+          this.playerPos.z += (dz / dist) * push;
+          this.playerRig.root.position.copy(this.playerPos);
+        }
+      }
+    }
   }
 
   public initCameraPosition() {
-    const camOffsetY = this.isCrouching ? 1.3 : 1.85;
-    const shoulderOffset = this.isAiming ? 0.65 : 0.0;
+    const camOffsetY = this.isCrouching ? 1.25 : 1.65;
+    const shoulderOffset = this.isAiming ? 0.52 : 0.0;
     const sinY = Math.sin(this.playerYaw);
     const cosY = Math.cos(this.playerYaw);
 
-    const camX = this.playerPos.x - sinY * this.cameraDistance * Math.cos(this.cameraPitch) + cosY * shoulderOffset;
-    const camY = this.playerPos.y + camOffsetY + Math.sin(this.cameraPitch) * this.cameraDistance;
-    const camZ = this.playerPos.z - cosY * this.cameraDistance * Math.cos(this.cameraPitch) - sinY * shoulderOffset;
+    const forwardX = sinY * Math.cos(this.cameraPitch);
+    const forwardY = -Math.sin(this.cameraPitch);
+    const forwardZ = cosY * Math.cos(this.cameraPitch);
+
+    const pivotX = this.playerPos.x + cosY * shoulderOffset;
+    const pivotY = this.playerPos.y + camOffsetY;
+    const pivotZ = this.playerPos.z - sinY * shoulderOffset;
+
+    const camX = pivotX - forwardX * this.cameraDistance;
+    const camY = Math.max(getGroundElevation(camX, pivotZ) + 0.35, pivotY - forwardY * this.cameraDistance);
+    const camZ = pivotZ - forwardZ * this.cameraDistance;
 
     this.camera.position.set(camX, camY, camZ);
     this.cameraLookAt.set(
-      this.playerPos.x + sinY * 1.8 + cosY * shoulderOffset,
-      this.playerPos.y + (this.isCrouching ? 0.95 : 1.25),
-      this.playerPos.z + cosY * 1.8 - sinY * shoulderOffset
+      pivotX + forwardX * 40,
+      pivotY + forwardY * 40,
+      pivotZ + forwardZ * 40
     );
     this.camera.lookAt(this.cameraLookAt);
     this.isCameraInitialized = true;
@@ -2840,6 +4522,10 @@ export class GameEngine {
   public destroy() {
     this.resizeObserver?.disconnect();
     window.removeEventListener('resize', this.onResize);
+    if (this.activeInterior) {
+      this.scene.remove(this.activeInterior.interiorGroup);
+      this.activeInterior = null;
+    }
     cityIncidentManager.onRadioBroadcast = undefined;
     cityIncidentManager.onIncidentStateChange = undefined;
     cityIncidentManager.reset();

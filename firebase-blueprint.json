@@ -81,6 +81,38 @@
           "type": "string",
           "description": "Cruiser siren sound type."
         },
+        "integrity": {
+          "type": "number",
+          "description": "Officer moral integrity level."
+        },
+        "bankSavings": {
+          "type": "number",
+          "description": "Clean bank savings balance."
+        },
+        "policeReputation": {
+          "type": "number",
+          "description": "Official police department reputation standing."
+        },
+        "underworldReputation": {
+          "type": "number",
+          "description": "Underworld street trust standing."
+        },
+        "suspicionLevel": {
+          "type": "number",
+          "description": "Internal Affairs suspicion / heat level."
+        },
+        "dirtyCash": {
+          "type": "number",
+          "description": "Unlaundered dirty street cash."
+        },
+        "legitimateEarnings": {
+          "type": "number",
+          "description": "Total legitimate police pay."
+        },
+        "secretEarnings": {
+          "type": "number",
+          "description": "Total off-the-books underworld income."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

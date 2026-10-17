@@ -661,23 +661,23 @@ export function generateCityDistrict(): CityBuildResult {
   commercialGroup.add(crossH);
 
   // Building 4B: Syndicate Lounge & Apex Coffee (East of alley, X: -24 to -14)
-  const b4bGeom = new THREE.BoxGeometry(18, 20, 32);
+  const b4bGeom = new THREE.BoxGeometry(10, 20, 32);
   const b4bMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
   const b4bMesh = new THREE.Mesh(b4bGeom, b4bMat);
-  b4bMesh.position.set(-15, 10, -27);
+  b4bMesh.position.set(-19, 10, -27);
   b4bMesh.castShadow = true;
   b4bMesh.receiveShadow = true;
   commercialGroup.add(b4bMesh);
-  addCollision(-15, -27, 18, 32, 20);
+  addCollision(-19, -27, 10, 32, 20);
 
   // Syndicate Lounge Velvet Neon Sign
-  const loungeSign = new THREE.Mesh(new THREE.BoxGeometry(12, 2.2, 0.3), neonGoldMat);
-  loungeSign.position.set(-15, 14, -10.8);
+  const loungeSign = new THREE.Mesh(new THREE.BoxGeometry(8, 2.2, 0.3), neonGoldMat);
+  loungeSign.position.set(-19, 14, -10.8);
   commercialGroup.add(loungeSign);
 
   // Warm Coffee Shop Display Windows
-  const coffeeWin = new THREE.Mesh(new THREE.BoxGeometry(12, 3.6, 0.3), warmWindowMat);
-  coffeeWin.position.set(-15, 2.1, -10.8);
+  const coffeeWin = new THREE.Mesh(new THREE.BoxGeometry(8, 3.6, 0.3), warmWindowMat);
+  coffeeWin.position.set(-19, 2.1, -10.8);
   commercialGroup.add(coffeeWin);
 
   // Detailed Commercial Alleyway Corridor (X: -32 to -24, Z: -12 to -42)
@@ -1437,7 +1437,8 @@ export function generateCityDistrict(): CityBuildResult {
     sGroup.add(adBox);
 
     sceneGroup.add(sGroup);
-    addCollision(ss.x, ss.z, 4.2, 2.0, 2.8, 'barrier');
+    // In world orientation, rotated 90 degrees: width along X is 2.0m, length along Z is 4.2m
+    addCollision(ss.x, ss.z, 2.0, 4.2, 2.8, 'barrier');
   });
 
   // Modern Fire Hydrants & Smart Parking Meters
@@ -1451,70 +1452,6 @@ export function generateCityDistrict(): CityBuildResult {
     hyd.castShadow = true;
     sceneGroup.add(hyd);
     addCollision(hs.x, hs.z, 0.4, 0.4, 0.8, 'prop');
-  });
-
-  // ----------------------------------------------------
-  // 9. PARKED CIVILIAN VEHICLES (adds believable urban life and scale)
-  // ----------------------------------------------------
-  const parkedVehicles = [
-    { x: -7.5, z: 34, rot: Math.PI, color: 0x2563eb }, // Royal blue sedan outside precinct
-    { x: -7.5, z: -35, rot: 0, color: 0xd97706 },      // Amber gold compact outside deli
-    { x: -7.5, z: -18, rot: 0, color: 0xdc2626 },      // Crimson hatchback outside coffee shop
-    { x: 7.5, z: -35, rot: 0, color: 0x475569 },       // Slate SUV outside bank
-    { x: 7.5, z: -18, rot: 0, color: 0x0284c7 },       // Sky blue coupe on avenue east
-    { x: 7.5, z: 30, rot: Math.PI, color: 0x16a34a },  // Forest green wagon near docks
-    { x: 7.5, z: 46, rot: Math.PI, color: 0xfbbf24 },  // Taxi yellow cab on avenue east
-  ];
-
-  const headlightMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
-  const taillightMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
-
-  parkedVehicles.forEach((pv) => {
-    const carGroup = new THREE.Group();
-    carGroup.position.set(pv.x, 0, pv.z);
-    carGroup.rotation.y = pv.rot;
-
-    const carMat = new THREE.MeshStandardMaterial({ color: pv.color, roughness: 0.35, metalness: 0.6 });
-    // Smooth chassis
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, 4.2), carMat);
-    body.position.y = 0.55;
-    body.castShadow = true;
-    body.receiveShadow = true;
-    carGroup.add(body);
-
-    // Aerodynamic cabin
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.65, 0.52, 2.2), glassMat);
-    cabin.position.set(0, 1.05, -0.2);
-    cabin.castShadow = true;
-    carGroup.add(cabin);
-
-    // Headlights (front +Z)
-    [-0.65, 0.65].forEach((hx) => {
-      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.16, 0.08), headlightMat);
-      hl.position.set(hx, 0.55, 2.1);
-      carGroup.add(hl);
-    });
-
-    // Taillights (rear -Z)
-    [-0.65, 0.65].forEach((tx) => {
-      const tl = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.16, 0.08), taillightMat);
-      tl.position.set(tx, 0.55, -2.1);
-      carGroup.add(tl);
-    });
-
-    // Wheels
-    const tireMat = new THREE.MeshStandardMaterial({ color: 0x171717, roughness: 0.9 });
-    [-0.95, 0.95].forEach((wx) => {
-      [-1.2, 1.2].forEach((wz) => {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.22, 14), tireMat);
-        wheel.rotateZ(Math.PI / 2);
-        wheel.position.set(wx, 0.32, wz);
-        carGroup.add(wheel);
-      });
-    });
-
-    sceneGroup.add(carGroup);
-    addCollision(pv.x, pv.z, 2.0, 4.4, 1.5, 'barrier');
   });
 
   return {
@@ -1551,6 +1488,26 @@ export function generateCityDistrict(): CityBuildResult {
     },
   };
 }
+
+export interface ParkedVehicleConfig {
+  id: string;
+  name: string;
+  type: 'civilian';
+  x: number;
+  z: number;
+  rot: number;
+  color: string;
+}
+
+export const PARKED_CIVILIAN_VEHICLE_CONFIGS: ParkedVehicleConfig[] = [
+  { id: 'parked_sedan_precinct', name: 'Civilian Sedan', type: 'civilian', x: -7.5, z: 34, rot: Math.PI, color: '#2563eb' }, // Royal blue sedan outside precinct
+  { id: 'parked_deli_compact', name: 'Compact Car', type: 'civilian', x: -7.5, z: -35, rot: 0, color: '#d97706' },      // Amber gold compact outside deli
+  { id: 'parked_coffee_hatch', name: 'Hatchback', type: 'civilian', x: -7.5, z: -18, rot: 0, color: '#dc2626' },      // Crimson hatchback outside coffee shop
+  { id: 'parked_bank_suv', name: 'Urban SUV', type: 'civilian', x: 7.5, z: -35, rot: 0, color: '#475569' },       // Slate SUV outside bank
+  { id: 'parked_avenue_coupe', name: 'Sport Coupe', type: 'civilian', x: 7.5, z: -18, rot: 0, color: '#0284c7' },       // Sky blue coupe on avenue east
+  { id: 'parked_docks_wagon', name: 'Station Wagon', type: 'civilian', x: 7.5, z: 30, rot: Math.PI, color: '#16a34a' },  // Forest green wagon near docks
+  { id: 'parked_taxi_cab', name: 'City Taxi', type: 'civilian', x: 7.5, z: 46, rot: Math.PI, color: '#fbbf24' },  // Taxi yellow cab on avenue east
+];
 
 /**
  * Returns accurate ground surface height at (x, z):

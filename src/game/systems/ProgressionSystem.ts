@@ -93,7 +93,13 @@ export const INITIAL_PLAYER_STATS: PlayerStats = {
   kills: 0,
   arrests: 0,
   missionsCompleted: 0,
-  reputation: 85, // 0 to 100 (Internal Affairs standing)
+  reputation: 85, // 0 to 100 (Official Police Standing)
+  policeReputation: 85, // 0 to 100 (Official Police Standing)
+  underworldReputation: 15, // 0 to 100 (Criminal Underworld Respect & Trust)
+  suspicionLevel: 10, // 0 to 100 (Internal Affairs Heat & Suspicion)
+  legitimateEarnings: 500, // Clean money from police department
+  secretEarnings: 0, // Dirty/off-the-record money from shady activities
+  dirtyCash: 0, // Unlaundered cash on hand
   integrity: 80, // 0 to 100: Moral Integrity (80 = By-the-Book Officer)
   bankSavings: 1200, // Starting insured bank balance in Metro Corporate Bank
   valuables: [
@@ -108,6 +114,7 @@ export const INITIAL_PLAYER_STATS: PlayerStats = {
     },
   ],
   vaultValuables: [],
+  evidenceRecovered: [],
   backupCooldown: 0,
   iaViolations: 0,
   civiliansRescued: 0,

@@ -23,12 +23,16 @@ import {
   MilitaryNPCEntity,
   EvidenceItem,
   DynamicEvent,
+  EnterableBuilding,
+  EnterableBuildingId,
+  FictionalValuable,
 } from './types/game';
 import { CRIME_CASES, INITIAL_EVIDENCE_ITEMS, CrimeCase } from './game/systems/InvestigationSystem';
 import { generateRandomCityEvent, cityIncidentManager } from './game/systems/DynamicEventsSystem';
 import { STORY_MISSIONS, generateRandomPoliceMission } from './game/systems/MissionSystem';
 import { authoritativeEncounterManager } from './game/systems/EncounterManager';
 import { soundEngine } from './game/audio/SoundEffects';
+import { cinematicMusicEngine, MusicTheme, TrackInfo } from './game/audio/CinematicMusicEngine';
 import { auth, loginWithGoogle, logoutUser, testConnection } from './lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -48,6 +52,30 @@ import { StoryCutsceneModal } from './components/StoryCutsceneModal';
 import { CrimeCasesModal } from './components/CrimeCasesModal';
 import { CivilianDialogueModal } from './components/CivilianDialogueModal';
 import { DynamicEventBanner } from './components/DynamicEventBanner';
+import { EventChoiceModal } from './components/EventChoiceModal';
+import { ArrestEvidenceModal, ArrestChoiceResult } from './components/ArrestEvidenceModal';
+import { BankValuablesModal, ValuablesChoiceResult } from './components/BankValuablesModal';
+import { BankModal } from './components/BankModal';
+import { EvidenceLockerModal } from './components/EvidenceLockerModal';
+import { InteriorMerchantModal } from './components/InteriorMerchantModal';
+import { DualIdentityModal } from './components/DualIdentityModal';
+import { WelcomeScreen } from './components/WelcomeScreen';
+import { ProfileSetupModal } from './components/ProfileSetupModal';
+import { PrologueStoryExperience } from './components/PrologueStoryExperience';
+import { DeathBeforeBetrayalCinematic } from './components/DeathBeforeBetrayalCinematic';
+import {
+  PlayerProfileSettings,
+  DEFAULT_PLAYER_PROFILE,
+  PreferredPlayStyle,
+} from './types/game';
+import {
+  CharacterVisualAesthetic,
+  setGlobalCharacterAesthetic,
+} from './game/engine/CharacterModels';
+import {
+  ActiveInteriorState,
+  InteriorInteractable,
+} from './game/engine/BuildingInteriors';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -88,6 +116,52 @@ export default function App() {
   // Dynamic 911 Calls
   const [activeDynamicEvent, setActiveDynamicEvent] = useState<DynamicEvent | null>(null);
   const [activeIncidentObjective, setActiveIncidentObjective] = useState<DynamicEvent | null>(null);
+  const [activeEventChoice, setActiveEventChoice] = useState<DynamicEvent | null>(null);
+
+  // First-Time Experience, Profile, & Story Prologue State
+  const [playerProfile, setPlayerProfile] = useState<PlayerProfileSettings>(() => {
+    try {
+      const savedLocal = localStorage.getItem('street_justice_local_profile');
+      if (savedLocal) {
+        const parsed = JSON.parse(savedLocal);
+        if (parsed.profile) return { ...DEFAULT_PLAYER_PROFILE, ...parsed.profile };
+      }
+      const savedDedicated = localStorage.getItem('street_justice_player_profile');
+      if (savedDedicated) return { ...DEFAULT_PLAYER_PROFILE, ...JSON.parse(savedDedicated) };
+    } catch {}
+    return DEFAULT_PLAYER_PROFILE;
+  });
+
+  const [hasSavedGame, setHasSavedGame] = useState<boolean>(() => {
+    try {
+      const savedLocal = localStorage.getItem('street_justice_local_profile');
+      if (savedLocal) {
+        const parsed = JSON.parse(savedLocal);
+        if (parsed.stats || parsed.savedAt || (parsed.profile && parsed.profile.hasCompletedIntro)) {
+          return true;
+        }
+      }
+      const savedDedicated = localStorage.getItem('street_justice_player_profile');
+      if (savedDedicated) {
+        const parsed = JSON.parse(savedDedicated);
+        if (parsed.hasCompletedIntro) return true;
+      }
+    } catch {}
+    return false;
+  });
+
+  const [isWelcomeScreenOpen, setIsWelcomeScreenOpen] = useState<boolean>(true);
+  const [isProfileSetupOpen, setIsProfileSetupOpen] = useState<boolean>(false);
+  const [isEditingProfile, setIsEditingProfile] = useState<boolean>(false);
+  const [isPrologueOpen, setIsPrologueOpen] = useState<boolean>(false);
+  const [isReplayingPrologue, setIsReplayingPrologue] = useState<boolean>(false);
+  const [characterAesthetic, setCharacterAesthetic] = useState<CharacterVisualAesthetic>(() => {
+    try {
+      const saved = localStorage.getItem('street_justice_character_aesthetic');
+      if (saved === 'blocky' || saved === 'realistic' || saved === 'prototype') return saved;
+    } catch {}
+    return 'prototype';
+  });
 
   // Modals & Overlays
   const [isMainMenuOpen, setIsMainMenuOpen] = useState<boolean>(false);
@@ -96,13 +170,28 @@ export default function App() {
   const [gameStatus, setGameStatus] = useState<'victory' | 'defeat' | null>(null);
 
   const [activeCutscene, setActiveCutscene] = useState<{ mission: Mission; type: 'intro' | 'outro' } | null>(null);
+  const [finalMissionCinematic, setFinalMissionCinematic] = useState<{
+    isOpen: boolean;
+    initialPhase: 'phase1_threat' | 'phase2_climax_handshake';
+  } | null>(null);
   const [interrogationSuspect, setInterrogationSuspect] = useState<EnemyEntity | null>(null);
+  const [arrestEvidenceSuspect, setArrestEvidenceSuspect] = useState<EnemyEntity | null>(null);
   const [activeCivilian, setActiveCivilian] = useState<CivilianEntity | null>(null);
   const [civilians, setCivilians] = useState<CivilianEntity[]>([]);
   const [policeNPCs, setPoliceNPCs] = useState<PoliceNPCEntity[]>([]);
   const [militarySoldiers, setMilitarySoldiers] = useState<MilitaryNPCEntity[]>([]);
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
   const [isCasesOpen, setIsCasesOpen] = useState<boolean>(false);
+  const [isDualIdentityOpen, setIsDualIdentityOpen] = useState<boolean>(false);
+
+  // Enterable Buildings & 3D Interior States
+  const [nearbyBuildingEntrance, setNearbyBuildingEntrance] = useState<EnterableBuilding | null>(null);
+  const [nearbyInteriorInteractable, setNearbyInteriorInteractable] = useState<InteriorInteractable | null>(null);
+  const [activeInterior, setActiveInterior] = useState<ActiveInteriorState | null>(null);
+  const [bankValuablesTarget, setBankValuablesTarget] = useState<InteriorInteractable | null>(null);
+  const [isBankModalOpen, setIsBankModalOpen] = useState<boolean>(false);
+  const [isEvidenceLockerOpen, setIsEvidenceLockerOpen] = useState<boolean>(false);
+  const [activeMerchantBuildingId, setActiveMerchantBuildingId] = useState<EnterableBuildingId | null>(null);
 
   const [playerPos, setPlayerPos] = useState<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
   const [playerYaw, setPlayerYaw] = useState<number>(0);
@@ -110,7 +199,14 @@ export default function App() {
   const [isAiming, setIsAiming] = useState<boolean>(false);
   const [isReloading, setIsReloading] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [musicVolume, setMusicVolume] = useState<number>(() => cinematicMusicEngine.getMusicVolume());
+  const [sfxVolume, setSfxVolume] = useState<number>(() => soundEngine.getSfxVolume());
+  const [isMusicMuted, setIsMusicMuted] = useState<boolean>(() => cinematicMusicEngine.isMusicMuted());
+  const [isSfxMuted, setIsSfxMuted] = useState<boolean>(() => soundEngine.isSfxMuted());
+  const [isMusicPaused, setIsMusicPaused] = useState<boolean>(() => cinematicMusicEngine.isMusicPaused());
+  const [currentTrackInfo, setCurrentTrackInfo] = useState<TrackInfo>(() => cinematicMusicEngine.getCurrentTrackInfo());
   const [isFlashlightOn, setIsFlashlightOn] = useState<boolean>(false);
+  const [damageFlash, setDamageFlash] = useState<boolean>(false);
 
   const [customization, setCustomization] = useState<CustomizationSettings>({
     outfit: 'rookie_patrol',
@@ -193,19 +289,22 @@ export default function App() {
       customWeapons?: WeaponConfig[],
       customMissions?: Mission[],
       customCases?: CrimeCase[],
-      customSettings?: CustomizationSettings
+      customSettings?: CustomizationSettings,
+      customProfile?: PlayerProfileSettings
     ) => {
       const curStats = customStats || stats;
       const curWeapons = customWeapons || weapons;
       const curMissions = customMissions || missions;
       const curCases = customCases || cases;
       const curCustomization = customSettings || customization;
+      const curProfile = customProfile || playerProfile;
 
       // Always save locally so guest officers keep their career progress
       try {
         localStorage.setItem(
           'street_justice_local_profile',
           JSON.stringify({
+            profile: curProfile,
             stats: curStats,
             weapons: curWeapons,
             missions: curMissions,
@@ -214,6 +313,7 @@ export default function App() {
             savedAt: new Date().toISOString(),
           })
         );
+        localStorage.setItem('street_justice_player_profile', JSON.stringify(curProfile));
         setLastSavedAt(new Date());
       } catch (err) {
         // Storage unavailable or quota limit
@@ -254,6 +354,12 @@ export default function App() {
       const savedLocal = localStorage.getItem('street_justice_local_profile');
       if (savedLocal) {
         const parsed = JSON.parse(savedLocal);
+        if (parsed.profile) {
+          setPlayerProfile(parsed.profile);
+          setHasSavedGame(true);
+        } else if (parsed.stats || parsed.savedAt) {
+          setHasSavedGame(true);
+        }
         if (parsed.stats) {
           setStats((prev) => ({ ...prev, ...parsed.stats }));
           if (engineRef.current) {
@@ -302,9 +408,18 @@ export default function App() {
               civiliansRescued: cloudProfile.civiliansRescued ?? prev.civiliansRescued,
               evidenceFound: cloudProfile.evidenceFound ?? prev.evidenceFound,
               iaViolations: cloudProfile.iaViolations ?? prev.iaViolations,
+              policeReputation: cloudProfile.policeReputation ?? cloudProfile.reputation ?? prev.policeReputation ?? prev.reputation,
+              underworldReputation: cloudProfile.underworldReputation ?? prev.underworldReputation ?? 15,
+              suspicionLevel: cloudProfile.suspicionLevel ?? prev.suspicionLevel ?? 10,
+              dirtyCash: cloudProfile.dirtyCash ?? prev.dirtyCash ?? 0,
+              legitimateEarnings: cloudProfile.legitimateEarnings ?? prev.legitimateEarnings ?? prev.money,
+              secretEarnings: cloudProfile.secretEarnings ?? prev.secretEarnings ?? 0,
+              integrity: cloudProfile.integrity ?? prev.integrity ?? 75,
+              bankSavings: cloudProfile.bankSavings ?? prev.bankSavings ?? 0,
             };
             if (engineRef.current) {
               engineRef.current.stats = { ...newStats };
+              engineRef.current.syncDoubleLifeStats(newStats);
             }
             return newStats;
           });
@@ -488,6 +603,20 @@ export default function App() {
           // Authoritatively mark encounter completed so it never restarts automatically
           authoritativeEncounterManager.completeEncounter(`mission_enc_${m.id}`);
 
+          if (m.id === 'ch8_death_before_betrayal') {
+            // Trigger Chapter 8: Death Before Betrayal Climax Confrontation & Fake Handshake!
+            setTimeout(() => {
+              soundEngine.playRadioChime();
+              setFinalMissionCinematic({ isOpen: true, initialPhase: 'phase2_climax_handshake' });
+            }, 450);
+
+            return {
+              ...m,
+              objectives: newObjectives,
+              completed: true,
+            };
+          }
+
           // Trigger Outro Story Cutscene with Moral Choice!
           setTimeout(() => {
             soundEngine.playRadioChime();
@@ -517,13 +646,20 @@ export default function App() {
         ...stats,
         xp: newXP,
         money: stats.money + currentMission.rewardMoney,
+        legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + currentMission.rewardMoney,
         rank: rankInfo.rank,
         rankName: rankInfo.name,
         missionsCompleted: stats.missionsCompleted + 1,
         reputation: Math.min(100, stats.reputation + 5),
+        policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 5),
+        suspicionLevel: Math.max(0, (stats.suspicionLevel ?? 10) - 4),
       };
       setStats(nextStats);
       persistProgressToCloud(nextStats);
+      if (engineRef.current) {
+        engineRef.current.syncDoubleLifeStats(nextStats);
+      }
+      addNotification(`MISSION COMPLETED: +$${currentMission.rewardMoney.toLocaleString()} Legitimate Salary (+5 Police Rep, -4 Suspicion)`, 'success');
     }
   };
 
@@ -531,26 +667,37 @@ export default function App() {
   const handleCutsceneChoiceMade = (choice: 'A' | 'B') => {
     if (!currentMission?.choice) return;
     if (choice === 'A') {
-      // Option A effect
+      // Option A effect: Shady Deal
       const nextStats = {
         ...stats,
         money: stats.money + 1000,
+        secretEarnings: (stats.secretEarnings ?? 0) + 1000,
+        dirtyCash: (stats.dirtyCash ?? 0) + 1000,
         reputation: Math.max(0, stats.reputation + currentMission.choice!.optionA.reputationBonus),
+        policeReputation: Math.max(0, (stats.policeReputation ?? stats.reputation) + currentMission.choice!.optionA.reputationBonus),
+        underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 20),
+        suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 25),
         iaViolations: stats.iaViolations + 1,
       };
       setStats(nextStats);
       persistProgressToCloud(nextStats);
-      addNotification('Internal Affairs noted questionable conduct (-25 Rep, +$1,000)', 'alert');
+      if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      addNotification('Internal Affairs noted questionable conduct: +$1,000 Dirty Cash (-25 Police Rep, +25 Heat)', 'alert');
     } else {
-      // Option B effect
+      // Option B effect: Lawful Integrity
       const nextStats = {
         ...stats,
         xp: stats.xp + 300,
+        money: stats.money + 500,
+        legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + 500,
         reputation: Math.min(100, stats.reputation + currentMission.choice!.optionB.reputationBonus),
+        policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + currentMission.choice!.optionB.reputationBonus),
+        suspicionLevel: Math.max(0, (stats.suspicionLevel ?? 10) - 10),
       };
       setStats(nextStats);
       persistProgressToCloud(nextStats);
-      addNotification('Commendation for Lawful Integrity (+300 XP, +10 Rep)', 'success');
+      if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      addNotification('Commendation for Lawful Integrity: +$500 Official Bonus (+10 Police Rep, -10 Heat)', 'success');
     }
   };
 
@@ -576,17 +723,115 @@ export default function App() {
     }
   }, []);
 
-  // Interrogate & Frisk Suspect
+  // Interrogate, Search & Double-Life Arrest Choice Modal
   const handleOpenInterrogation = useCallback(() => {
     if (engineRef.current) {
       const suspect = engineRef.current.checkArrestedSuspectNearby();
       if (suspect) {
+        setArrestEvidenceSuspect(suspect);
         setInterrogationSuspect(suspect);
       } else {
-        addNotification('No arrested or surrendered suspect nearby to interrogate.', 'info');
+        addNotification('No arrested or surrendered suspect nearby to interact with.', 'info');
       }
     }
   }, []);
+
+  // Handle Officer Carter Double-Life Decision from Arrest & Evidence System
+  const handleApplyArrestResult = (result: ArrestChoiceResult) => {
+    const curPoliceRep = stats.policeReputation ?? stats.reputation;
+    const curUnderworldRep = stats.underworldReputation ?? 15;
+    const curSuspicion = stats.suspicionLevel ?? 10;
+    const curIntegrity = stats.integrity ?? 80;
+
+    const nextPoliceRep = Math.max(0, Math.min(100, curPoliceRep + result.policeRepDelta));
+    const nextUnderworldRep = Math.max(0, Math.min(100, curUnderworldRep + result.underworldRepDelta));
+    const nextSuspicion = Math.max(0, Math.min(100, curSuspicion + result.suspicionDelta));
+    const nextIntegrity = Math.max(0, Math.min(100, curIntegrity + result.integrityDelta));
+    const nextIaViolations = stats.iaViolations + (result.iaViolationDelta || 0);
+
+    const legIncome = result.legitimateMoneyDelta ?? (result.action === 'lawful' || result.action === 'transport' ? result.moneyDelta : 0);
+    const secIncome = result.dirtyMoneyDelta ?? (result.action !== 'lawful' && result.action !== 'transport' && result.moneyDelta > 0 ? result.moneyDelta : 0);
+
+    let nextValuables = [...(stats.valuables || [])];
+    if (result.contrabandValuable) {
+      nextValuables.push(result.contrabandValuable);
+    }
+
+    let nextEvidence = [...(stats.evidenceRecovered || [])];
+    if (result.evidenceItem) {
+      nextEvidence.push(result.evidenceItem);
+    }
+
+    const nextStats: PlayerStats = {
+      ...stats,
+      money: stats.money + result.moneyDelta,
+      legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + legIncome,
+      secretEarnings: (stats.secretEarnings ?? 0) + secIncome,
+      dirtyCash: Math.max(0, (stats.dirtyCash ?? 0) + secIncome),
+      reputation: nextPoliceRep,
+      policeReputation: nextPoliceRep,
+      underworldReputation: nextUnderworldRep,
+      suspicionLevel: nextSuspicion,
+      integrity: nextIntegrity,
+      iaViolations: nextIaViolations,
+      xp: stats.xp + result.xpDelta,
+      valuables: nextValuables,
+      evidenceRecovered: nextEvidence,
+      evidenceFound: result.evidenceItem ? stats.evidenceFound + 1 : stats.evidenceFound,
+    };
+
+    setStats(nextStats);
+    cityIncidentManager.playerReputation = nextPoliceRep;
+    persistProgressToCloud(nextStats);
+
+    if (engineRef.current) {
+      engineRef.current.syncDoubleLifeStats(nextStats);
+    }
+
+    // Trigger civilian misconduct alert if citizen witnessed shady action
+    if (result.witnessReported && engineRef.current) {
+      engineRef.current.triggerWitnessMisconductAlert(result.notificationText);
+    }
+
+    // Primary player feedback notification
+    addNotification(result.notificationText, result.isGood ? 'success' : 'alert');
+
+    // Dynamic Consequence Feedback
+    if (nextSuspicion >= 75 && curSuspicion < 75) {
+      setTimeout(() => {
+        addNotification('⚠️ INTERNAL AFFAIRS INVESTIGATION ACTIVE: Detectives investigating Carter\'s unexplained payouts and releases!', 'alert');
+        soundEngine.playRadioChime();
+      }, 2000);
+    } else if (nextUnderworldRep >= 50 && curUnderworldRep < 50) {
+      setTimeout(() => {
+        addNotification('🤝 UNDERWORLD TRUST ELEVATED: Criminals recognize Carter as an officer who cuts deals! Street bribes and surrender offers increased.', 'info');
+        soundEngine.playRadioChime();
+      }, 2000);
+    } else if (nextPoliceRep >= 85 && curPoliceRep < 85) {
+      setTimeout(() => {
+        addNotification('⭐ PRECINCT 9 COMMENDATION: Department leadership praised Officer Carter\'s clean evidence chain of custody!', 'success');
+        soundEngine.playRadioChime();
+      }, 2000);
+    }
+  };
+
+  // Transport Suspect
+  const handleTransportSuspectFromModal = (suspectId: string) => {
+    if (engineRef.current) {
+      engineRef.current.transportSuspect(suspectId);
+    }
+    setArrestEvidenceSuspect(null);
+    setInterrogationSuspect(null);
+  };
+
+  // Release Suspect (cut loose off record)
+  const handleReleaseSuspectFromModal = (suspectId: string) => {
+    if (engineRef.current) {
+      engineRef.current.releaseSuspect(suspectId);
+    }
+    setArrestEvidenceSuspect(null);
+    setInterrogationSuspect(null);
+  };
 
   // Confiscate contraband
   const handleConfiscateContraband = (amount: number, itemTitle: string) => {
@@ -739,11 +984,339 @@ export default function App() {
     setActiveDynamicEvent(null);
   };
 
+  // Officer Carter Moral Choice Made on Dynamic City Event
+  const handleMakeEventChoice = (choice: 'good' | 'shady') => {
+    if (!activeEventChoice || !activeEventChoice.moralChoice) return;
+    const mc = activeEventChoice.moralChoice;
+    const opt = choice === 'good' ? mc.goodOption : mc.shadyOption;
+
+    let nextStats = { ...stats };
+    if (choice === 'good') {
+      const repBonus = mc.goodOption.reputationBonus;
+      const cash = mc.goodOption.moneyBonus;
+      nextStats.reputation = Math.min(100, (nextStats.policeReputation ?? nextStats.reputation) + repBonus);
+      nextStats.policeReputation = nextStats.reputation;
+      nextStats.suspicionLevel = Math.max(0, (nextStats.suspicionLevel ?? 10) - 5);
+      nextStats.money += cash;
+      nextStats.legitimateEarnings = (nextStats.legitimateEarnings ?? nextStats.money) + cash;
+      nextStats.xp += mc.goodOption.xpBonus;
+      nextStats.civiliansRescued += 1;
+      addNotification(`Lawful Action: ${mc.goodOption.label}! (+${repBonus} Police Rep, +$${cash} Salary, -5 Heat)`, 'success');
+    } else {
+      const repBonus = mc.shadyOption.reputationBonus;
+      const cash = mc.shadyOption.moneyBonus;
+      nextStats.reputation = Math.max(0, (nextStats.policeReputation ?? nextStats.reputation) + repBonus);
+      nextStats.policeReputation = nextStats.reputation;
+      nextStats.underworldReputation = Math.min(100, (nextStats.underworldReputation ?? 15) + 16);
+      nextStats.suspicionLevel = Math.min(100, (nextStats.suspicionLevel ?? 10) + 18);
+      nextStats.money += cash;
+      nextStats.secretEarnings = (nextStats.secretEarnings ?? 0) + cash;
+      nextStats.dirtyCash = (nextStats.dirtyCash ?? 0) + cash;
+      nextStats.iaViolations += 1;
+      if (mc.shadyOption.valuableReward) {
+        nextStats.valuables = [...(nextStats.valuables || []), mc.shadyOption.valuableReward];
+      }
+      addNotification(`Shady Deal: ${mc.shadyOption.label}! (+16 Underworld Trust, +$${cash} Dirty Cash, +18 Heat)`, 'alert');
+    }
+
+    setStats(nextStats);
+    cityIncidentManager.playerReputation = nextStats.reputation;
+    persistProgressToCloud(nextStats);
+
+    if (engineRef.current) {
+      engineRef.current.syncDoubleLifeStats(nextStats);
+      engineRef.current.resolveIncidentChoice(activeEventChoice.id, choice);
+    } else {
+      cityIncidentManager.resolveIncidentWithMoralChoice(activeEventChoice.id, choice);
+    }
+
+    setActiveIncidentObjective(null);
+    setActiveEventChoice(null);
+  };
+
+  // Reliable Direct Vehicle Exit Handler
+  const handleExitVehicle = useCallback(() => {
+    if (engineRef.current && engineRef.current.currentVehicleIndex >= 0) {
+      engineRef.current.exitVehicle();
+    }
+  }, []);
+
+  // Interior Interaction Triggered from Game Engine
+  const handleTriggerInteriorInteraction = useCallback(
+    (interactable: InteriorInteractable) => {
+      if (
+        interactable.type === 'bank_teller' ||
+        interactable.type === 'manager_safe' ||
+        interactable.type === 'vault_gold' ||
+        interactable.type === 'cctv_console' ||
+        interactable.type === 'backroom_safe'
+      ) {
+        setBankValuablesTarget(interactable);
+      } else if (interactable.type === 'atm_terminal') {
+        setIsBankModalOpen(true);
+      } else if (interactable.type === 'evidence_locker') {
+        setIsEvidenceLockerOpen(true);
+      } else if (interactable.type === 'store_counter') {
+        setActiveMerchantBuildingId(activeInterior?.building.id || 'cedar_market');
+      } else if (interactable.type === 'police_armory') {
+        setWeapons((prev) =>
+          prev.map((w) => ({
+            ...w,
+            currentAmmo: w.magazineSize,
+            reserveAmmo: Math.max(w.reserveAmmo, w.magazineSize * 4),
+          }))
+        );
+        setStats((prev) => ({
+          ...prev,
+          armor: prev.maxArmor,
+        }));
+        addNotification('Armory Depot: Ammunition Requisitioned & Tactical Armor Plating Restocked!', 'success');
+        soundEngine.playReload();
+      } else if (interactable.type === 'duty_desk') {
+        addNotification('Precinct 9 Duty Desk: Shift log active. All city patrol sectors monitored.', 'info');
+      }
+    },
+    [activeInterior]
+  );
+
+  // Apply Valuables & Interior Dilemma Choice
+  const handleApplyValuablesResult = (result: ValuablesChoiceResult) => {
+    let nextStats = { ...stats };
+    const polDelta = result.policeRepDelta ?? result.reputationDelta;
+    const underDelta = result.underworldRepDelta ?? (result.isGood ? -5 : 15);
+    const suspDelta = result.suspicionDelta ?? (result.isGood ? -8 : 16);
+    const legMoney = result.legitimateMoneyDelta ?? (result.isGood ? result.moneyDelta : 0);
+    const secMoney = result.dirtyMoneyDelta ?? (!result.isGood ? result.moneyDelta : 0);
+
+    nextStats.reputation = Math.max(0, Math.min(100, (nextStats.policeReputation ?? nextStats.reputation) + polDelta));
+    nextStats.policeReputation = nextStats.reputation;
+    nextStats.underworldReputation = Math.max(0, Math.min(100, (nextStats.underworldReputation ?? 15) + underDelta));
+    nextStats.suspicionLevel = Math.max(0, Math.min(100, (nextStats.suspicionLevel ?? 10) + suspDelta));
+
+    nextStats.money += result.moneyDelta;
+    nextStats.legitimateEarnings = (nextStats.legitimateEarnings ?? nextStats.money) + legMoney;
+    nextStats.secretEarnings = (nextStats.secretEarnings ?? 0) + secMoney;
+    if (secMoney > 0) {
+      nextStats.dirtyCash = (nextStats.dirtyCash ?? 0) + secMoney;
+    }
+    nextStats.xp += result.xpDelta;
+    if (result.iaViolationDelta) {
+      nextStats.iaViolations += result.iaViolationDelta;
+    }
+    if (result.clearIaViolations) {
+      nextStats.iaViolations = 0;
+      nextStats.wantedLevel = 0;
+      nextStats.suspicionLevel = 5;
+    }
+    if (result.evidenceDelta) {
+      nextStats.evidenceFound += result.evidenceDelta;
+    }
+    if (result.civiliansDelta) {
+      nextStats.civiliansRescued += result.civiliansDelta;
+    }
+    if (result.valuableReward) {
+      nextStats.valuables = [...(nextStats.valuables || []), result.valuableReward];
+    }
+    setStats(nextStats);
+    cityIncidentManager.playerReputation = nextStats.reputation;
+    persistProgressToCloud(nextStats);
+    if (engineRef.current) {
+      engineRef.current.syncDoubleLifeStats(nextStats);
+    }
+    addNotification(result.notificationText, result.isGood ? 'success' : 'alert');
+  };
+
+  // Bank Deposit
+  const handleBankDeposit = (amount: number) => {
+    const nextStats = {
+      ...stats,
+      money: stats.money - amount,
+      bankSavings: (stats.bankSavings || 0) + amount,
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(`Deposited $${amount.toLocaleString()} into Metro Trust Savings.`, 'success');
+  };
+
+  // Bank Withdraw
+  const handleBankWithdraw = (amount: number) => {
+    const nextStats = {
+      ...stats,
+      money: stats.money + amount,
+      bankSavings: Math.max(0, (stats.bankSavings || 0) - amount),
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(`Withdrew $${amount.toLocaleString()} from Metro Trust Savings.`, 'info');
+  };
+
+  // Appraise & exchange valuable for insured cash
+  const handleBankConvertValuable = (valuableId: string) => {
+    const val = (stats.valuables || []).find((v) => v.id === valuableId);
+    if (!val) return;
+    const nextValuables = (stats.valuables || []).filter((v) => v.id !== valuableId);
+    const nextStats = {
+      ...stats,
+      money: stats.money + val.estimatedValue,
+      valuables: nextValuables,
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(`Exchanged ${val.name} for $${val.estimatedValue.toLocaleString()} in clean cash!`, 'success');
+  };
+
+  // Store valuable in bank vault safety deposit box
+  const handleBankStoreValuable = (valuableId: string) => {
+    const val = (stats.valuables || []).find((v) => v.id === valuableId);
+    if (!val) return;
+    const nextValuables = (stats.valuables || []).filter((v) => v.id !== valuableId);
+    const nextVaultValuables = [...(stats.vaultValuables || []), val];
+    const nextStats = {
+      ...stats,
+      valuables: nextValuables,
+      vaultValuables: nextVaultValuables,
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(`Locked ${val.name} in personal Safety Deposit Box.`, 'info');
+  };
+
+  // Retrieve valuable from bank vault safety deposit box
+  const handleBankRetrieveValuable = (valuableId: string) => {
+    const val = (stats.vaultValuables || []).find((v) => v.id === valuableId);
+    if (!val) return;
+    const nextVaultValuables = (stats.vaultValuables || []).filter((v) => v.id !== valuableId);
+    const nextValuables = [...(stats.valuables || []), val];
+    const nextStats = {
+      ...stats,
+      valuables: nextValuables,
+      vaultValuables: nextVaultValuables,
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    addNotification(`Retrieved ${val.name} from Safety Deposit Box.`, 'info');
+  };
+
+  // Evidence Locker: Log evidence legitimately
+  const handleLogEvidenceHonor = (valuable: FictionalValuable) => {
+    const nextValuables = (stats.valuables || []).filter((v) => v.id !== valuable.id);
+    const bounty = 250;
+    const nextStats = {
+      ...stats,
+      valuables: nextValuables,
+      money: stats.money + bounty,
+      legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + bounty,
+      reputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 15),
+      policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 15),
+      suspicionLevel: Math.max(0, (stats.suspicionLevel ?? 10) - 10),
+      integrity: Math.min(100, (stats.integrity || 50) + 12),
+      evidenceFound: stats.evidenceFound + 1,
+      xp: stats.xp + 100,
+    };
+    setStats(nextStats);
+    cityIncidentManager.playerReputation = nextStats.reputation;
+    persistProgressToCloud(nextStats);
+    if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+    addNotification(`Officially booked ${valuable.name} into Precinct 9 Evidence Room (+15 Police Rep, -10 Heat, +$250 Salary)`, 'success');
+  };
+
+  // Evidence Locker: Pocket contraband corruptly
+  const handlePocketContrabandCorrupt = (valuable: FictionalValuable) => {
+    const nextStats = {
+      ...stats,
+      money: stats.money + valuable.estimatedValue,
+      secretEarnings: (stats.secretEarnings ?? 0) + valuable.estimatedValue,
+      dirtyCash: (stats.dirtyCash ?? 0) + valuable.estimatedValue,
+      reputation: Math.max(0, (stats.policeReputation ?? stats.reputation) - 20),
+      policeReputation: Math.max(0, (stats.policeReputation ?? stats.reputation) - 20),
+      underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 18),
+      suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 22),
+      integrity: Math.max(0, (stats.integrity || 50) - 15),
+      iaViolations: stats.iaViolations + 1,
+    };
+    setStats(nextStats);
+    cityIncidentManager.playerReputation = nextStats.reputation;
+    persistProgressToCloud(nextStats);
+    if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+    addNotification(`Fenced contraband ${valuable.name} for $${valuable.estimatedValue.toLocaleString()} dirty cash! (+18 Underworld Trust, +22 Heat)`, 'alert');
+  };
+
+  // Launch underground opportunities unlocked through Underworld Reputation
+  const handleLaunchUnderworldOpportunity = (type: 'arms_lead' | 'chop_shop' | 'contraband_drop') => {
+    setIsDualIdentityOpen(false);
+    if (type === 'chop_shop') {
+      const reward = 650;
+      const nextStats = {
+        ...stats,
+        money: stats.money + reward,
+        secretEarnings: (stats.secretEarnings ?? 0) + reward,
+        dirtyCash: (stats.dirtyCash ?? 0) + reward,
+        underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 8),
+        suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 12),
+        xp: stats.xp + 250,
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
+      if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      soundEngine.playRadioChime();
+      addNotification(`🕶️ Chop-Shop Deal Executed! Looked the other way for Neon Pythons. +$${reward} Dirty Cash (+8 Crime Rep, +12 Heat)`, 'alert');
+    } else if (type === 'arms_lead') {
+      const reward = 1400;
+      const nextStats = {
+        ...stats,
+        money: stats.money + reward,
+        secretEarnings: (stats.secretEarnings ?? 0) + reward,
+        dirtyCash: (stats.dirtyCash ?? 0) + reward,
+        underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 14),
+        suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 16),
+        xp: stats.xp + 450,
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
+      if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      soundEngine.playRadioChime();
+      addNotification(`🕶️ Harbor Arms Tipoff Fenced! Intercepted cartel cache off the books. +$${reward} Dirty Cash (+14 Crime Rep, +16 Heat)`, 'alert');
+    } else if (type === 'contraband_drop') {
+      const reward = 2800;
+      const nextStats = {
+        ...stats,
+        money: stats.money + reward,
+        secretEarnings: (stats.secretEarnings ?? 0) + reward,
+        dirtyCash: (stats.dirtyCash ?? 0) + reward,
+        underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 20),
+        suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 22),
+        xp: stats.xp + 800,
+      };
+      setStats(nextStats);
+      persistProgressToCloud(nextStats);
+      if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      soundEngine.playRadioChime();
+      addNotification(`🕶️ Syndicate Dead-Drop Collected! Fenced bearer bonds securely. +$${reward} Dirty Cash (+20 Crime Rep, +22 Heat)`, 'alert');
+    }
+  };
+
+  // Interior merchant purchase
+  const handlePurchaseMerchantItem = (cost: number, perk: string) => {
+    let nextStats = { ...stats, money: stats.money - cost };
+    if (perk === 'first_aid') {
+      nextStats.health = Math.min(nextStats.maxHealth, nextStats.health + 40);
+    } else if (perk === 'vest') {
+      nextStats.armor = nextStats.maxArmor;
+    } else if (perk === 'intel') {
+      nextStats.xp += 150;
+      nextStats.reputation = Math.min(100, nextStats.reputation + 5);
+    }
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+  };
+
   // Stabilize callbacks and UI flags in refs to prevent GameEngine re-instantiation on modal toggles
   const isCameraOpenRef = useRef(isCameraOpen);
   isCameraOpenRef.current = isCameraOpen;
   const isCasesOpenRef = useRef(isCasesOpen);
   isCasesOpenRef.current = isCasesOpen;
+  const arrestEvidenceSuspectRef = useRef(arrestEvidenceSuspect);
+  arrestEvidenceSuspectRef.current = arrestEvidenceSuspect;
   const interrogationSuspectRef = useRef(interrogationSuspect);
   interrogationSuspectRef.current = interrogationSuspect;
   const activeCivilianRef = useRef(activeCivilian);
@@ -754,6 +1327,19 @@ export default function App() {
   handleOrderSurrenderRef.current = handleOrderSurrender;
   const handleCallBackupRef = useRef(handleCallBackup);
   handleCallBackupRef.current = handleCallBackup;
+  const handleTriggerInteriorInteractionRef = useRef(handleTriggerInteriorInteraction);
+  handleTriggerInteriorInteractionRef.current = handleTriggerInteriorInteraction;
+
+  const isMainMenuOpenRef = useRef(isMainMenuOpen);
+  isMainMenuOpenRef.current = isMainMenuOpen;
+  const gameStatusRef = useRef(gameStatus);
+  gameStatusRef.current = gameStatus;
+  const activeIncidentObjectiveRef = useRef(activeIncidentObjective);
+  activeIncidentObjectiveRef.current = activeIncidentObjective;
+  const currentMissionRef = useRef(currentMission);
+  currentMissionRef.current = currentMission;
+  const damageFlashRef = useRef(damageFlash);
+  damageFlashRef.current = damageFlash;
 
   // Initialize Game Engine (Once on mount)
   useEffect(() => {
@@ -782,6 +1368,13 @@ export default function App() {
       }
     };
 
+    engine.onPlayerDamaged = (_damage) => {
+      setDamageFlash(true);
+      setTimeout(() => {
+        setDamageFlash(false);
+      }, 260);
+    };
+
     engine.onWeaponChanged = (newW) => {
       setActiveWeapon({ ...newW });
       setWeapons([...engine.weapons]);
@@ -795,8 +1388,40 @@ export default function App() {
       handleObjectiveProgress(type, amount);
     };
 
+    engine.onTriggerFinalMissionCinematic = (phase = 'phase1_threat') => {
+      setFinalMissionCinematic({ isOpen: true, initialPhase: phase });
+    };
+
     engine.onIncidentResolved = (_inc) => {
       setActiveIncidentObjective(null);
+    };
+
+    engine.onEventMoralChoiceAvailable = (ev) => {
+      setActiveEventChoice(ev);
+      soundEngine.playRadioChime();
+    };
+
+    // Double-Life Arrest, Cuffs & Evidence Booking Modal Trigger
+    engine.onOpenArrestEvidenceModal = (suspect) => {
+      setArrestEvidenceSuspect(suspect);
+      setInterrogationSuspect(suspect);
+    };
+
+    // Enterable Building & Interior Callbacks
+    engine.onBuildingEntranceChanged = (building) => {
+      setNearbyBuildingEntrance(building);
+    };
+
+    engine.onInteriorInteractableChanged = (interactable) => {
+      setNearbyInteriorInteractable(interactable);
+    };
+
+    engine.onInteriorStateChanged = (interior) => {
+      setActiveInterior(interior);
+    };
+
+    engine.onTriggerInteriorInteraction = (interactable) => {
+      handleTriggerInteriorInteractionRef.current(interactable);
     };
 
     // Main animation & input sync loop
@@ -835,6 +1460,42 @@ export default function App() {
           setPoliceNPCs([...engineRef.current.ai.policeNPCs]);
           setMilitarySoldiers([...engineRef.current.ai.militarySoldiers]);
         }
+
+        // Dynamic Cinematic Music Theme Transition (evaluated every ~0.65s)
+        if (frameCounter % 40 === 0) {
+          let targetTheme: MusicTheme = 'exploration';
+          if (isMainMenuOpenRef.current) {
+            targetTheme = 'menu';
+          } else if (gameStatusRef.current === 'victory') {
+            targetTheme = 'victory';
+          } else {
+            const playerPos = engineRef.current.playerPos;
+            const isCombat =
+              engineRef.current.ai.enemies.some((e) => {
+                if (e.state === 'dead' || e.state === 'arrested' || e.state === 'surrendered') return false;
+                const dist = Math.hypot(e.position.x - playerPos.x, e.position.z - playerPos.z);
+                return dist < 36 && (e.state === 'shoot' || e.state === 'chase' || e.alertLevel > 60);
+              }) ||
+              engineRef.current.recentGunshotTimer > 0 ||
+              damageFlashRef.current;
+
+            if (isCombat) {
+              targetTheme = 'combat';
+            } else if (
+              activeIncidentObjectiveRef.current ||
+              (currentMissionRef.current && !currentMissionRef.current.completed && currentMissionRef.current.unlocked)
+            ) {
+              targetTheme = 'mission';
+            } else {
+              targetTheme = 'exploration';
+            }
+          }
+
+          if (cinematicMusicEngine.getCurrentTheme() !== targetTheme) {
+            cinematicMusicEngine.playTheme(targetTheme);
+            setCurrentTrackInfo(cinematicMusicEngine.getCurrentTrackInfo());
+          }
+        }
       }
       animId = requestAnimationFrame(loop);
     };
@@ -866,13 +1527,61 @@ export default function App() {
 
       if (k === 'e') {
         // Smart Contextual Interaction:
-        // 1. If near arrested/surrendered suspect -> Open Interrogation
-        // 2. If near civilian -> Question witness
-        // 3. If near vehicle -> Enter/Exit
-        // 4. If near surrendered suspect -> Handcuff/Arrest
+        // 1. If currently inside building interior -> Trigger interactable or Exit Door
+        // 2. If outside near enterable building entrance -> Enter Building
+        // 3. If currently inside vehicle -> Exit Vehicle immediately
+        // 4. If near suitable vehicle -> Enter Vehicle
+        // 5. If near arrested/surrendered suspect -> Open Interrogation
+        // 6. If near civilian -> Question witness
+        // 7. Default interact (arrest / action)
         if (engineRef.current) {
+          // Inside building interior
+          if (engineRef.current.activeInterior) {
+            const interactable = engineRef.current.nearbyInteriorInteractable;
+            if (interactable) {
+              if (interactable.type === 'exit_door') {
+                engineRef.current.exitBuilding();
+              } else {
+                engineRef.current.triggerInteriorInteractable(interactable);
+              }
+              return;
+            }
+          }
+
+          // Outside near enterable building entrance
+          if (engineRef.current.nearbyBuildingEntrance && engineRef.current.currentVehicleIndex < 0) {
+            engineRef.current.enterBuilding(engineRef.current.nearbyBuildingEntrance.id);
+            return;
+          }
+
+          if (engineRef.current.currentVehicleIndex >= 0) {
+            engineRef.current.exitVehicle();
+            return;
+          }
+
+          // Check captive hostage rescue first
+          const hostageNearby = engineRef.current.checkHostageNearbyToRescue();
+          if (hostageNearby) {
+            engineRef.current.rescueHostage();
+            return;
+          }
+
+          const nearVeh = engineRef.current.vehicles.some(
+            (v) =>
+              engineRef.current!.playerPos.distanceTo({
+                x: v.entity.position.x,
+                y: 0,
+                z: v.entity.position.z,
+              } as any) < 4.8
+          );
+          if (nearVeh) {
+            engineRef.current.enterVehicle();
+            return;
+          }
+
           const arrestedNearby = engineRef.current.checkArrestedSuspectNearby();
-          if (arrestedNearby && arrestedNearby.state === 'arrested') {
+          if (arrestedNearby) {
+            setArrestEvidenceSuspect(arrestedNearby);
             setInterrogationSuspect(arrestedNearby);
             return;
           }
@@ -899,6 +1608,9 @@ export default function App() {
           setIsCameraOpen(false);
         } else if (isCasesOpenRef.current) {
           setIsCasesOpen(false);
+        } else if (arrestEvidenceSuspectRef.current) {
+          setArrestEvidenceSuspect(null);
+          setInterrogationSuspect(null);
         } else if (interrogationSuspectRef.current) {
           setInterrogationSuspect(null);
         } else if (activeCivilianRef.current) {
@@ -967,7 +1679,7 @@ export default function App() {
               x: v.entity.position.x,
               y: 0,
               z: v.entity.position.z,
-            } as any) < 4.0
+            } as any) < 4.8
         )
       : false;
 
@@ -1007,6 +1719,126 @@ export default function App() {
           z: civ.position.z,
         } as any) < 3.2
     );
+
+  const nearbyEventWithChoice =
+    engineRef.current
+      ? cityIncidentManager.activeIncidents.find(
+          (inc) =>
+            inc.active &&
+            inc.moralChoice &&
+            !inc.choiceMade &&
+            Math.hypot(engineRef.current!.playerPos.x - inc.position.x, engineRef.current!.playerPos.z - inc.position.z) < 10.0
+        )
+      : null;
+
+  // Building & interior interaction helpers
+  const canEnterBuilding = !!nearbyBuildingEntrance && !currentVehicle && !activeInterior;
+  const canExitBuilding = !!activeInterior && nearbyInteriorInteractable?.type === 'exit_door';
+  const interiorInteractLabel =
+    nearbyInteriorInteractable && nearbyInteriorInteractable.type !== 'exit_door'
+      ? nearbyInteriorInteractable.prompt
+      : undefined;
+
+  const canRescueHostage =
+    engineRef.current &&
+    engineRef.current.missionHostages.some(
+      (h) =>
+        !(h as any).isRescued &&
+        ((h as any).health === undefined || (h as any).health > 0) &&
+        engineRef.current!.playerPos.distanceTo({
+          x: h.position.x,
+          y: 0,
+          z: h.position.z,
+        } as any) < 4.2
+    );
+
+  const handleRescueHostage = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.rescueHostage();
+    }
+  }, []);
+
+  // Chapter 8: Death Before Betrayal Handlers
+  const handleFinalMissionChoiceASelected = useCallback(() => {
+    const nextStats: PlayerStats = {
+      ...stats,
+      iaViolations: stats.iaViolations + 1,
+      suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 40),
+      policeReputation: Math.max(0, (stats.policeReputation ?? stats.reputation) - 35),
+      reputation: Math.max(0, stats.reputation - 35),
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+  }, [stats, persistProgressToCloud]);
+
+  const handleFinalMissionChoiceBSelected = useCallback(() => {
+    setFinalMissionCinematic(null);
+    addNotification('BATTLE FOR METRO CITY: Neutralize 5 Heavy Operatives & Untie 3 Hostages!', 'alert');
+  }, [addNotification]);
+
+  const handleFinalMissionRestart = useCallback(() => {
+    setFinalMissionCinematic(null);
+    handleRestart();
+    const ch8 = missions.find((m) => m.id === 'ch8_death_before_betrayal');
+    if (ch8 && engineRef.current) {
+      engineRef.current.setMission(ch8);
+      setCurrentMissionId('ch8_death_before_betrayal');
+    }
+  }, [missions]);
+
+  const handleFinalMissionContinueFreeRoam = useCallback(
+    (ending: 'coward_last_breath' | 'trust_the_devil') => {
+      setFinalMissionCinematic(null);
+      if (ending === 'trust_the_devil') {
+        const newXP = stats.xp + 8000;
+        const rankInfo = getRankForXP(newXP);
+        const nextStats: PlayerStats = {
+          ...stats,
+          xp: newXP,
+          money: stats.money + 15000,
+          legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + 15000,
+          rank: rankInfo.rank,
+          rankName: 'Master Detective',
+          civiliansRescued: stats.civiliansRescued + 3,
+          missionsCompleted: stats.missionsCompleted + 1,
+          reputation: 100,
+          policeReputation: 100,
+        };
+        setStats(nextStats);
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+
+        setMissions((prev) =>
+          prev.map((m) =>
+            m.id === 'ch8_death_before_betrayal' ? { ...m, completed: true } : m
+          )
+        );
+        addNotification('CAMPAIGN COMPLETED: Chapter 8 Concluded! Free Roam & City Patrol Unlocked.', 'success');
+      } else {
+        addNotification('Free Roam Resumed: Chapter 8 remains available in the Precinct 9 dossier.', 'info');
+      }
+    },
+    [stats, persistProgressToCloud, addNotification]
+  );
+
+  const handleEnterBuilding = useCallback(() => {
+    if (nearbyBuildingEntrance && engineRef.current) {
+      engineRef.current.enterBuilding(nearbyBuildingEntrance.id);
+    }
+  }, [nearbyBuildingEntrance]);
+
+  const handleExitBuilding = useCallback(() => {
+    if (engineRef.current) {
+      engineRef.current.exitBuilding();
+    }
+  }, []);
+
+  const handleInteriorInteract = useCallback(() => {
+    if (nearbyInteriorInteractable && engineRef.current) {
+      engineRef.current.triggerInteriorInteractable(nearbyInteriorInteractable);
+    }
+  }, [nearbyInteriorInteractable]);
 
   // Weapon Buy / Upgrade Handler
   const handleBuyOrUpgradeWeapon = (weaponId: string) => {
@@ -1152,20 +1984,251 @@ export default function App() {
     }
   };
 
-  // Mute audio
-  const handleToggleMute = () => {
+  // Audio Mixer Handlers
+  const handleMusicVolumeChange = useCallback((v: number) => {
+    cinematicMusicEngine.setMusicVolume(v);
+    setMusicVolume(v);
+  }, []);
+
+  const handleSfxVolumeChange = useCallback((v: number) => {
+    soundEngine.setSfxVolume(v);
+    setSfxVolume(v);
+  }, []);
+
+  const handleToggleMusicMute = useCallback(() => {
+    const next = cinematicMusicEngine.toggleMute();
+    setIsMusicMuted(next);
+  }, []);
+
+  const handleToggleSfxMute = useCallback(() => {
+    const next = soundEngine.toggleMute();
+    setIsSfxMuted(next);
+  }, []);
+
+  const handleToggleMusicPause = useCallback(() => {
+    if (cinematicMusicEngine.isMusicPaused()) {
+      cinematicMusicEngine.resume();
+      setIsMusicPaused(false);
+    } else {
+      cinematicMusicEngine.pause();
+      setIsMusicPaused(true);
+    }
+  }, []);
+
+  const handleSelectTheme = useCallback((theme: MusicTheme) => {
+    cinematicMusicEngine.playTheme(theme, true);
+    setCurrentTrackInfo(cinematicMusicEngine.getCurrentTrackInfo());
+  }, []);
+
+  // Master Mute audio
+  const handleToggleMute = useCallback(() => {
     const next = !isMuted;
     setIsMuted(next);
+    cinematicMusicEngine.setMuted(next);
     soundEngine.setMuted(next);
-  };
+    setIsMusicMuted(next);
+    setIsSfxMuted(next);
+  }, [isMuted]);
 
   // Outfit change
   const handleChangeOutfit = (outfit: CustomizationSettings['outfit']) => {
     setCustomization((prev) => ({ ...prev, outfit }));
     if (engineRef.current) {
-      addNotification(`Uniform changed to ${outfit}`, 'info');
+      engineRef.current.setPlayerOutfit(outfit);
+      addNotification(
+        `Uniform changed to ${
+          outfit === 'tactical_swat'
+            ? 'Tactical SWAT'
+            : outfit === 'detective'
+            ? 'Undercover Detective'
+            : 'Precinct 9 Patrol'
+        }`,
+        'info'
+      );
     }
   };
+
+  // Character 3D Visual Style change (Roblox-Inspired Prototype)
+  const handleChangeAesthetic = useCallback((newAesthetic: CharacterVisualAesthetic) => {
+    setCharacterAesthetic(newAesthetic);
+    setGlobalCharacterAesthetic(newAesthetic);
+    try {
+      localStorage.setItem('street_justice_character_aesthetic', newAesthetic);
+    } catch {}
+    if (engineRef.current) {
+      engineRef.current.setPlayerOutfit(customization.outfit);
+    }
+    addNotification(
+      `Character Visual Style: ${
+        newAesthetic === 'blocky'
+          ? 'Blocky Stylized (Roblox-Inspired)'
+          : newAesthetic === 'prototype'
+          ? 'Prototype Cohort (Neighborhood & Officers)'
+          : 'Realistic Urban'
+      }`,
+      'info'
+    );
+  }, [customization.outfit, addNotification]);
+
+  // Welcome Screen Handlers
+  const handleContinueCareer = useCallback(() => {
+    setIsWelcomeScreenOpen(false);
+    setIsMainMenuOpen(false);
+    if (engineRef.current) {
+      engineRef.current.isCinematicMode = false;
+      engineRef.current.initCameraPosition();
+    }
+    cinematicMusicEngine.startSequence('exploration');
+    addNotification(`Welcome back, ${playerProfile.callsign}. Resuming active patrol.`, 'info');
+  }, [playerProfile.callsign, addNotification]);
+
+  const handleStartNewGameFromWelcome = useCallback(() => {
+    setIsWelcomeScreenOpen(false);
+    setIsEditingProfile(false);
+    setIsProfileSetupOpen(true);
+  }, []);
+
+  // Character Profile Setup Confirm
+  const handleConfirmProfileSetup = useCallback(
+    (newProfile: PlayerProfileSettings) => {
+      setPlayerProfile(newProfile);
+      setCustomization((prev) => ({
+        ...prev,
+        outfit: newProfile.outfit,
+      }));
+      try {
+        localStorage.setItem('street_justice_player_profile', JSON.stringify(newProfile));
+      } catch {}
+
+      if (isEditingProfile) {
+        setIsProfileSetupOpen(false);
+        setIsEditingProfile(false);
+        if (engineRef.current) {
+          engineRef.current.setPlayerOutfit(newProfile.outfit);
+        }
+        persistProgressToCloud(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          {
+            ...customization,
+            outfit: newProfile.outfit,
+          },
+          newProfile
+        );
+        addNotification(`Officer dossier updated: ${newProfile.callsign}`, 'success');
+      } else {
+        // New Game -> Launch Story-Driven Prologue & Tutorial!
+        setIsProfileSetupOpen(false);
+        setIsPrologueOpen(true);
+      }
+    },
+    [isEditingProfile, customization, persistProgressToCloud, addNotification]
+  );
+
+  // Replay Story Prologue (Young Carter Origins) without losing active career
+  const handlePlayPrologue = useCallback(() => {
+    setIsReplayingPrologue(true);
+    setIsWelcomeScreenOpen(false);
+    setIsMainMenuOpen(false);
+    setIsMenuOpen(false);
+    setIsPrologueOpen(true);
+    addNotification('Entering Oakridge District: Experience Young Carter\'s humble origins.', 'info');
+  }, [addNotification]);
+
+  // Complete Story Prologue & Transition to Adult Officer Carter
+  const handleCompletePrologue = useCallback(
+    (chosenPlaystyle?: PreferredPlayStyle) => {
+      if (isReplayingPrologue) {
+        setIsPrologueOpen(false);
+        setIsReplayingPrologue(false);
+        if (engineRef.current) {
+          engineRef.current.endPrologueMode(playerProfile.outfit);
+        }
+        addNotification(`Story Prologue concluded. Resuming Officer Carter's active career.`, 'success');
+        return;
+      }
+
+      const finalPlayStyle = chosenPlaystyle || playerProfile.playStyle || 'balanced';
+      const updatedProfile: PlayerProfileSettings = {
+        ...playerProfile,
+        playStyle: finalPlayStyle,
+        hasCompletedIntro: true,
+        lastPlayedAt: new Date().toISOString(),
+      };
+      setPlayerProfile(updatedProfile);
+      setHasSavedGame(true);
+
+      // Playstyle starting bonuses
+      let startingStats = { ...INITIAL_PLAYER_STATS };
+      if (finalPlayStyle === 'underworld') {
+        startingStats.money += 1000;
+        startingStats.secretEarnings = 1000;
+        startingStats.underworldReputation = 55;
+        startingStats.reputation = 60;
+      } else if (finalPlayStyle === 'law_enforcement') {
+        startingStats.policeReputation = 80;
+        startingStats.integrity = 90;
+        startingStats.iaViolations = 0;
+      }
+      if (playerProfile.difficulty === 'easy') {
+        startingStats.armor = 125;
+        startingStats.maxArmor = 125;
+        startingStats.money += 500;
+      }
+
+      setStats(startingStats);
+      setWeapons(INITIAL_WEAPONS);
+      setMissions(STORY_MISSIONS);
+      setCases(CRIME_CASES);
+      setCurrentMissionId(STORY_MISSIONS[0].id);
+
+      if (engineRef.current) {
+        engineRef.current.endPrologueMode(playerProfile.outfit);
+        engineRef.current.stats = { ...startingStats };
+        engineRef.current.weapons = INITIAL_WEAPONS;
+        authoritativeEncounterManager.reset();
+        engineRef.current.setMission(STORY_MISSIONS[0]);
+      }
+
+      persistProgressToCloud(
+        startingStats,
+        INITIAL_WEAPONS,
+        STORY_MISSIONS,
+        CRIME_CASES,
+        {
+          ...customization,
+          outfit: playerProfile.outfit,
+        },
+        updatedProfile
+      );
+
+      setIsPrologueOpen(false);
+      setIsWelcomeScreenOpen(false);
+      setIsMainMenuOpen(false);
+      setBriefingOpen(true);
+      cinematicMusicEngine.startSequence('mission');
+      addNotification(
+        `Welcome to Precinct 9, ${playerProfile.callsign}. Chapter 1 commenced.`,
+        'success'
+      );
+    },
+    [isReplayingPrologue, playerProfile, customization, persistProgressToCloud, addNotification]
+  );
+
+  const handleSkipToAdultCareer = useCallback(() => {
+    if (isReplayingPrologue) {
+      setIsPrologueOpen(false);
+      setIsReplayingPrologue(false);
+      if (engineRef.current) {
+        engineRef.current.endPrologueMode(playerProfile.outfit);
+      }
+      addNotification(`Resumed active career as Officer Carter.`, 'info');
+      return;
+    }
+    handleCompletePrologue();
+  }, [isReplayingPrologue, handleCompletePrologue, playerProfile.outfit, addNotification]);
 
   // Time of Day
   const handleChangeTimeOfDay = (time: TimeOfDay) => {
@@ -1199,10 +2262,12 @@ export default function App() {
         ref={containerRef}
         className="absolute inset-0 w-full h-full cursor-crosshair overflow-hidden"
         onClick={() => {
+          cinematicMusicEngine.unlockAudio();
           soundEngine.startAmbientCity();
           soundEngine.toggleSiren(false);
         }}
         onTouchStart={() => {
+          cinematicMusicEngine.unlockAudio();
           soundEngine.startAmbientCity();
         }}
       />
@@ -1236,6 +2301,13 @@ export default function App() {
         onToggleFullscreen={handleToggleFullscreen}
         timeOfDay={timeOfDay}
         onToggleTimeOfDay={handleCycleTimeOfDay}
+        nearbyBuildingEntrance={nearbyBuildingEntrance}
+        nearbyInteriorInteractable={nearbyInteriorInteractable}
+        activeInterior={activeInterior}
+        onExitBuilding={handleExitBuilding}
+        damageFlash={damageFlash}
+        onOpenDualIdentity={() => setIsDualIdentityOpen(true)}
+        onExitVehicle={handleExitVehicle}
       />
 
       {/* MOBILE TOUCH CONTROLS */}
@@ -1254,6 +2326,15 @@ export default function App() {
         onToggleCamera={() => setIsCameraOpen((prev) => !prev)}
         onToggleFlashlight={handleToggleFlashlight}
         onCallBackup={handleCallBackup}
+        canEnterBuilding={canEnterBuilding}
+        onEnterBuilding={handleEnterBuilding}
+        canExitBuilding={canExitBuilding}
+        onExitBuilding={handleExitBuilding}
+        interiorInteractLabel={interiorInteractLabel}
+        onInteriorInteract={handleInteriorInteract}
+        onExitVehicle={handleExitVehicle}
+        canRescueHostage={!!canRescueHostage}
+        onRescueHostage={handleRescueHostage}
       />
 
       {/* DYNAMIC 911 CALL BANNER */}
@@ -1261,6 +2342,15 @@ export default function App() {
         event={activeDynamicEvent}
         onRespond={handleRespondDynamicEvent}
         onDismiss={handleDismissDynamicEvent}
+      />
+
+      {/* OFFICER CARTER MORAL DILEMMA MODAL */}
+      <EventChoiceModal
+        isOpen={!!activeEventChoice}
+        event={activeEventChoice}
+        onClose={() => setActiveEventChoice(null)}
+        onMakeChoice={handleMakeEventChoice}
+        carterReputation={stats.reputation}
       />
 
       {/* FORENSIC CAMERA OVERLAY */}
@@ -1272,10 +2362,22 @@ export default function App() {
         isNearEvidence={!!nearbyEvidence}
       />
 
+      {/* OFFICER CARTER DOUBLE-LIFE ARREST, EVIDENCE & BOOKING MODAL */}
+      <ArrestEvidenceModal
+        suspect={arrestEvidenceSuspect}
+        isOpen={!!arrestEvidenceSuspect}
+        onClose={() => setArrestEvidenceSuspect(null)}
+        onApplyArrestResult={handleApplyArrestResult}
+        onTransportSuspect={handleTransportSuspectFromModal}
+        onReleaseSuspect={handleReleaseSuspectFromModal}
+        stats={stats}
+        witnessesNearby={engineRef.current ? engineRef.current.countNearbyWitnesses() : 0}
+      />
+
       {/* SUSPECT INTERROGATION & FRISK MODAL */}
       <InterrogationModal
         suspect={interrogationSuspect}
-        isOpen={!!interrogationSuspect}
+        isOpen={!arrestEvidenceSuspect && !!interrogationSuspect}
         onClose={() => setInterrogationSuspect(null)}
         onConfiscateContraband={handleConfiscateContraband}
         onCallTransport={handleCallTransport}
@@ -1300,6 +2402,57 @@ export default function App() {
         onSolveCase={handleSolveCase}
       />
 
+      {/* BANK VALUABLES & MORAL DILEMMA MODAL */}
+      <BankValuablesModal
+        isOpen={!!bankValuablesTarget}
+        interactable={bankValuablesTarget}
+        onClose={() => setBankValuablesTarget(null)}
+        onApplyResult={handleApplyValuablesResult}
+        carterReputation={stats.reputation}
+      />
+
+      {/* OFFICER CARTER'S DUAL IDENTITY & UNDERGROUND OPPORTUNITIES MODAL */}
+      <DualIdentityModal
+        isOpen={isDualIdentityOpen}
+        onClose={() => setIsDualIdentityOpen(false)}
+        stats={stats}
+        witnessCountNearby={engineRef.current ? engineRef.current.countNearbyWitnesses() : 0}
+        onUnderworldOpportunityLaunch={handleLaunchUnderworldOpportunity}
+      />
+
+      {/* METRO COMMERCIAL BANK SAVINGS & VAULT MODAL */}
+      {isBankModalOpen && (
+        <BankModal
+          stats={stats}
+          onClose={() => setIsBankModalOpen(false)}
+          onDeposit={handleBankDeposit}
+          onWithdraw={handleBankWithdraw}
+          onConvertValuable={handleBankConvertValuable}
+          onStoreValuable={handleBankStoreValuable}
+          onRetrieveValuable={handleBankRetrieveValuable}
+        />
+      )}
+
+      {/* PRECINCT 9 EVIDENCE LOCKER MODAL */}
+      {isEvidenceLockerOpen && (
+        <EvidenceLockerModal
+          stats={stats}
+          onClose={() => setIsEvidenceLockerOpen(false)}
+          onLogEvidenceHonor={handleLogEvidenceHonor}
+          onPocketContrabandCorrupt={handlePocketContrabandCorrupt}
+        />
+      )}
+
+      {/* INTERIOR MERCHANT SHOP MODAL */}
+      {activeMerchantBuildingId && (
+        <InteriorMerchantModal
+          buildingId={activeMerchantBuildingId}
+          stats={stats}
+          onClose={() => setActiveMerchantBuildingId(null)}
+          onPurchaseItem={handlePurchaseMerchantItem}
+        />
+      )}
+
       {/* STORY CUTSCENE & MORAL CHOICE MODAL */}
       {activeCutscene && (
         <StoryCutsceneModal
@@ -1308,6 +2461,21 @@ export default function App() {
           type={activeCutscene.type}
           onComplete={handleOutroCutsceneCompleted}
           onChoiceMade={handleCutsceneChoiceMade}
+        />
+      )}
+
+      {/* FINAL CAMPAIGN CHAPTER 8: DEATH BEFORE BETRAYAL CINEMATIC */}
+      {finalMissionCinematic && (
+        <DeathBeforeBetrayalCinematic
+          isOpen={finalMissionCinematic.isOpen}
+          initialPhase={finalMissionCinematic.initialPhase}
+          mission={missions.find((m) => m.id === 'ch8_death_before_betrayal') || missions[0]}
+          stats={stats}
+          onChoiceASelected={handleFinalMissionChoiceASelected}
+          onChoiceBSelected={handleFinalMissionChoiceBSelected}
+          onRestartMission={handleFinalMissionRestart}
+          onContinueFreeRoam={handleFinalMissionContinueFreeRoam}
+          onClose={() => setFinalMissionCinematic(null)}
         />
       )}
 
@@ -1326,13 +2494,22 @@ export default function App() {
         onClose={() => setIsMenuOpen(false)}
         missions={missions}
         currentMissionId={currentMissionId}
+        playerProfile={playerProfile}
+        onOpenEditProfile={() => {
+          setIsMenuOpen(false);
+          setIsEditingProfile(true);
+          setIsProfileSetupOpen(true);
+        }}
         onSelectMission={handleSelectMission}
+        onPlayPrologue={handlePlayPrologue}
         weapons={weapons}
         stats={stats}
         onBuyOrUpgradeWeapon={handleBuyOrUpgradeWeapon}
         onUpgradeArmorOrHealth={handleUpgradeArmorOrHealth}
         customization={customization}
         onChangeOutfit={handleChangeOutfit}
+        characterAesthetic={characterAesthetic}
+        onChangeCharacterAesthetic={handleChangeAesthetic}
         timeOfDay={timeOfDay}
         weather={weather}
         onChangeTimeOfDay={handleChangeTimeOfDay}
@@ -1347,6 +2524,18 @@ export default function App() {
         onLogout={handleLogout}
         onManualSave={handleManualSave}
         onRespondIncident={handleRespondDynamicEvent}
+        musicVolume={musicVolume}
+        sfxVolume={sfxVolume}
+        onChangeMusicVolume={handleMusicVolumeChange}
+        onChangeSfxVolume={handleSfxVolumeChange}
+        isMusicMuted={isMusicMuted}
+        isSfxMuted={isSfxMuted}
+        onToggleMusicMute={handleToggleMusicMute}
+        onToggleSfxMute={handleToggleSfxMute}
+        isMusicPaused={isMusicPaused}
+        onToggleMusicPause={handleToggleMusicPause}
+        currentTrackInfo={currentTrackInfo}
+        onSelectTheme={handleSelectTheme}
       />
 
       {/* MAIN MENU */}
@@ -1354,6 +2543,15 @@ export default function App() {
         isOpen={isMainMenuOpen}
         onContinue={() => setIsMainMenuOpen(false)}
         onNewGame={handleNewGame}
+        onPlayPrologue={handlePlayPrologue}
+        characterAesthetic={characterAesthetic}
+        onChangeAesthetic={handleChangeAesthetic}
+        playerProfile={playerProfile}
+        onOpenProfileSetup={() => {
+          setIsMainMenuOpen(false);
+          setIsEditingProfile(true);
+          setIsProfileSetupOpen(true);
+        }}
         onSelectMission={(mId) => {
           handleSelectMission(mId);
           setIsMainMenuOpen(false);
@@ -1380,6 +2578,18 @@ export default function App() {
         onChangeWeather={handleChangeWeather}
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
+        musicVolume={musicVolume}
+        sfxVolume={sfxVolume}
+        onChangeMusicVolume={handleMusicVolumeChange}
+        onChangeSfxVolume={handleSfxVolumeChange}
+        isMusicMuted={isMusicMuted}
+        isSfxMuted={isSfxMuted}
+        onToggleMusicMute={handleToggleMusicMute}
+        onToggleSfxMute={handleToggleSfxMute}
+        isMusicPaused={isMusicPaused}
+        onToggleMusicPause={handleToggleMusicPause}
+        currentTrackInfo={currentTrackInfo}
+        onSelectTheme={handleSelectTheme}
         authUser={authUser}
         cloudSyncStatus={cloudSyncStatus}
         lastSavedAt={lastSavedAt}
@@ -1395,6 +2605,44 @@ export default function App() {
         stats={stats}
         onRestart={handleRestart}
         onContinue={handleContinueAfterVictory}
+      />
+
+      {/* WELCOME SCREEN */}
+      <WelcomeScreen
+        isOpen={isWelcomeScreenOpen}
+        hasSavedGame={hasSavedGame}
+        savedStats={stats}
+        savedProfile={playerProfile}
+        lastSavedAt={lastSavedAt}
+        onContinue={handleContinueCareer}
+        onStartNewGame={handleStartNewGameFromWelcome}
+        onPlayPrologue={handlePlayPrologue}
+        isMusicMuted={isMusicMuted}
+        onToggleMusicMute={handleToggleMusicMute}
+      />
+
+      {/* CHARACTER & PROFILE SETUP MODAL */}
+      <ProfileSetupModal
+        isOpen={isProfileSetupOpen}
+        initialProfile={playerProfile}
+        isEditing={isEditingProfile}
+        onConfirm={handleConfirmProfileSetup}
+        onCancel={() => {
+          setIsProfileSetupOpen(false);
+          setIsEditingProfile(false);
+        }}
+      />
+
+      {/* STORY-DRIVEN PROLOGUE & PLAYABLE TUTORIAL */}
+      <PrologueStoryExperience
+        isOpen={isPrologueOpen}
+        profile={playerProfile}
+        onCompletePrologue={handleCompletePrologue}
+        onSkipToAdultCareer={handleSkipToAdultCareer}
+        onSetWaypoint={(x, z) => engineRef.current?.setWaypointPosition(x, z, true)}
+        playerPos={playerPos}
+        onStartEnginePrologue={() => engineRef.current?.startPrologueMode()}
+        onEndEnginePrologue={() => engineRef.current?.endPrologueMode(playerProfile.outfit)}
       />
 
       {/* MOBILE LANDSCAPE ORIENTATION ADVISORY PROMPT */}

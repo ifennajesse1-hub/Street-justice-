@@ -3,6 +3,16 @@ import { EnemyType, GangFactionId } from '../../types/game';
 import { generateAppearanceProfile } from './NPCAppearanceSystem';
 import { buildHeadAndFacialFeatures } from './NPCOutfitBuilders';
 import { buildTorsoWithClothing, buildArticulatedArms, buildArticulatedLegs } from './NPCTorsoLimbBuilders';
+import { createBlockyCharacterMesh } from './BlockyCharacterModels';
+
+export { createBlockyCharacterMesh };
+
+export type CharacterVisualAesthetic = 'realistic' | 'blocky' | 'prototype';
+export let globalCharacterAesthetic: CharacterVisualAesthetic = 'prototype';
+
+export function setGlobalCharacterAesthetic(aesthetic: CharacterVisualAesthetic) {
+  globalCharacterAesthetic = aesthetic;
+}
 
 export interface CharacterAnimOptions {
   isGrounded?: boolean;
@@ -13,6 +23,7 @@ export interface CharacterAnimOptions {
   isShooting?: boolean;
   aimPitch?: number;
   weaponCategory?: string;
+  delta?: number;
 }
 
 export interface CharacterRig {
@@ -503,6 +514,26 @@ export function createCharacterMesh(
   displayName?: string,
   faction?: GangFactionId | 'aegis_taskforce'
 ): CharacterRig {
+  if (
+    outfitVariant === 'young_carter' ||
+    outfitVariant === 'mother_elena' ||
+    outfitVariant === 'mrs_gable' ||
+    outfitVariant === 'street_youth_marcus' ||
+    outfitVariant === 'blocky' ||
+    globalCharacterAesthetic === 'blocky' ||
+    (globalCharacterAesthetic === 'prototype' && (
+      displayName?.includes('Gable') ||
+      displayName?.includes('Marcus') ||
+      displayName?.includes('Elena') ||
+      displayName?.includes('Young') ||
+      displayName?.includes('Hayes') ||
+      displayName?.includes('Chen') ||
+      displayName?.includes('Skulls Gunner')
+    ))
+  ) {
+    return createBlockyCharacterMesh(type as any, outfitVariant, displayName, faction);
+  }
+
   const root = new THREE.Group();
 
   // 1. Generate distinctive, non-cloning appearance profile
@@ -1209,29 +1240,30 @@ export function updateCharacterAnimation(
   // WEAPON RECOIL & FLINCH REACTIONS
   // ------------------------------------------------------------------
   if (rig.recoilTimer > 0) {
-    rig.recoilTimer -= 0.035;
+    const dt = animOptions?.delta || 0.016;
+    rig.recoilTimer -= dt;
     const recoilProgress = Math.max(0, rig.recoilTimer / 0.14);
     if (rig.rightArm) {
-      rig.rightArm.rotation.x -= 0.20 * recoilProgress;
+      rig.rightArm.rotation.x -= 0.22 * recoilProgress;
       rig.rightArm.rotation.z += 0.04 * recoilProgress;
     }
     if (rig.leftArm && isAiming) {
-      rig.leftArm.rotation.x -= 0.16 * recoilProgress;
+      rig.leftArm.rotation.x -= 0.18 * recoilProgress;
     }
     if (rig.muzzleFlash) {
       rig.muzzleFlash.visible = true;
-      (rig.muzzleFlash.material as THREE.MeshBasicMaterial).opacity = 0.95;
+      (rig.muzzleFlash.material as THREE.MeshBasicMaterial).opacity = 0.98;
       rig.muzzleFlash.children.forEach((c) => {
         if (c instanceof THREE.Mesh && c.material) {
-          (c.material as THREE.MeshBasicMaterial).opacity = 0.9;
+          (c.material as THREE.MeshBasicMaterial).opacity = 0.95;
         }
       });
       rig.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
-      const s = 0.9 + Math.random() * 0.4;
+      const s = 1.0 + Math.random() * 0.45;
       rig.muzzleFlash.scale.set(s, s, s);
     }
     if (rig.muzzleLight) {
-      rig.muzzleLight.intensity = 2.6;
+      rig.muzzleLight.intensity = 3.2;
     }
   } else {
     if (rig.muzzleFlash) {
