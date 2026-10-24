@@ -19,6 +19,7 @@ import {
   Scale,
   Home,
   Heart,
+  FileText,
 } from 'lucide-react';
 import { InputState } from '../types/game';
 
@@ -48,6 +49,8 @@ interface TouchControlsProps {
   onExitVehicle?: () => void;
   canRescueHostage?: boolean;
   onRescueHostage?: () => void;
+  canCollectEvidence?: boolean;
+  onCollectEvidence?: () => void;
 }
 
 export const TouchControls: React.FC<TouchControlsProps> = ({
@@ -76,6 +79,8 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   onExitVehicle,
   canRescueHostage = false,
   onRescueHostage,
+  canCollectEvidence = false,
+  onCollectEvidence,
 }) => {
   const joystickBaseRef = useRef<HTMLDivElement>(null);
   const [joystickPos, setJoystickPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -190,6 +195,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
 
   // Contextual interact status
   const hasContextualInteract =
+    canCollectEvidence ||
     canRescueHostage ||
     canExitBuilding ||
     canEnterBuilding ||
@@ -200,7 +206,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     canEnterVehicle ||
     canMakeEventChoice;
 
-  const interactLabel = canRescueHostage
+  const interactLabel = canCollectEvidence
+    ? 'SECURE EVIDENCE'
+    : canRescueHostage
     ? 'RESCUE'
     : canExitBuilding
     ? 'EXIT TO STREET'
@@ -530,7 +538,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               <button
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  if (canRescueHostage && onRescueHostage) {
+                  if (canCollectEvidence && onCollectEvidence) {
+                    onCollectEvidence();
+                  } else if (canRescueHostage && onRescueHostage) {
                     onRescueHostage();
                   } else if (canExitBuilding && onExitBuilding) {
                     onExitBuilding();
@@ -552,7 +562,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 }}
                 onTouchStart={(e) => {
                   e.stopPropagation();
-                  if (canRescueHostage && onRescueHostage) {
+                  if (canCollectEvidence && onCollectEvidence) {
+                    onCollectEvidence();
+                  } else if (canRescueHostage && onRescueHostage) {
                     onRescueHostage();
                   } else if (canExitBuilding && onExitBuilding) {
                     onExitBuilding();
@@ -573,11 +585,13 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                   }
                 }}
                 className={`absolute bottom-20 right-38 sm:bottom-24 sm:right-43 ${
-                  canEnterVehicle || canEnterBuilding || canExitBuilding
+                  canEnterVehicle || canEnterBuilding || canExitBuilding || canCollectEvidence
                     ? 'w-24 sm:w-28 h-13 sm:h-14 rounded-2xl px-1'
                     : 'w-13 h-13 sm:w-14 sm:h-14 rounded-full'
                 } bg-gradient-to-br ${
-                  canRescueHostage
+                  canCollectEvidence
+                    ? 'from-cyan-500 to-blue-600 border-cyan-300 shadow-[0_0_25px_rgba(6,182,212,0.9)]'
+                    : canRescueHostage
                     ? 'from-emerald-500 to-green-600 border-emerald-300 shadow-[0_0_25px_rgba(16,185,129,0.9)]'
                     : canExitBuilding
                     ? 'from-amber-600/90 to-red-600/90 border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.7)]'
@@ -585,7 +599,9 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
                 } border-2 text-white flex flex-col items-center justify-center backdrop-blur-sm active:scale-95 transition-transform pointer-events-auto animate-pulse`}
                 title={interactLabel}
               >
-                {canRescueHostage ? (
+                {canCollectEvidence ? (
+                  <FileText className="w-5 h-5 text-white animate-bounce" />
+                ) : canRescueHostage ? (
                   <Heart className="w-5 h-5 text-white fill-white animate-bounce" />
                 ) : canExitBuilding ? (
                   <LogOut className="w-5 h-5 text-amber-300" />

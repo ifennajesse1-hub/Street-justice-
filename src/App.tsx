@@ -42,7 +42,7 @@ import {
 } from './game/systems/PlayerFirestoreService';
 import { HUD } from './components/HUD';
 import { TouchControls } from './components/TouchControls';
-import { PauseMenu } from './components/PauseMenu';
+import { PauseMenu, PauseMenuTab } from './components/PauseMenu';
 import { MissionBriefingModal } from './components/MissionBriefingModal';
 import { GameStatusModal } from './components/GameStatusModal';
 import { MainMenu } from './components/MainMenu';
@@ -63,6 +63,12 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { ProfileSetupModal } from './components/ProfileSetupModal';
 import { PrologueStoryExperience } from './components/PrologueStoryExperience';
 import { DeathBeforeBetrayalCinematic } from './components/DeathBeforeBetrayalCinematic';
+import {
+  OneSmallMatterModal,
+  OneSmallMatterPhase,
+  OneSmallMatterEarlyChoice,
+  OneSmallMatterFinalChoice,
+} from './components/OneSmallMatterModal';
 import {
   PlayerProfileSettings,
   DEFAULT_PLAYER_PROFILE,
@@ -166,6 +172,8 @@ export default function App() {
   // Modals & Overlays
   const [isMainMenuOpen, setIsMainMenuOpen] = useState<boolean>(false);
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
+  const [pauseMenuInitialTab, setPauseMenuInitialTab] = useState<PauseMenuTab>('missions');
+  const [offDutyTracking, setOffDutyTracking] = useState<'precinct' | 'house'>('house');
   const [briefingOpen, setBriefingOpen] = useState<boolean>(false);
   const [gameStatus, setGameStatus] = useState<'victory' | 'defeat' | null>(null);
 
@@ -173,6 +181,11 @@ export default function App() {
   const [finalMissionCinematic, setFinalMissionCinematic] = useState<{
     isOpen: boolean;
     initialPhase: 'phase1_threat' | 'phase2_climax_handshake';
+  } | null>(null);
+  const [oneSmallMatterModalState, setOneSmallMatterModalState] = useState<{
+    isOpen: boolean;
+    phase: OneSmallMatterPhase;
+    earlyChoice: OneSmallMatterEarlyChoice;
   } | null>(null);
   const [interrogationSuspect, setInterrogationSuspect] = useState<EnemyEntity | null>(null);
   const [arrestEvidenceSuspect, setArrestEvidenceSuspect] = useState<EnemyEntity | null>(null);
@@ -617,6 +630,24 @@ export default function App() {
             };
           }
 
+          if (m.id === 'ch9_one_small_matter') {
+            // Trigger Climax Confrontation with Developer Arthur Sterling & Building Inspector Howard Pike!
+            setTimeout(() => {
+              soundEngine.playRadioChime();
+              setOneSmallMatterModalState({
+                isOpen: true,
+                phase: 'stage6_confrontation',
+                earlyChoice: oneSmallMatterModalState?.earlyChoice || 'investigate',
+              });
+            }, 450);
+
+            return {
+              ...m,
+              objectives: newObjectives,
+              completed: true,
+            };
+          }
+
           // Trigger Outro Story Cutscene with Moral Choice!
           setTimeout(() => {
             soundEngine.playRadioChime();
@@ -628,6 +659,31 @@ export default function App() {
             objectives: newObjectives,
             completed: true,
           };
+        }
+
+        if (anyUpdated && !allCompleted) {
+          if (m.id === 'ch9_one_small_matter') {
+            const protectWitnessObj = newObjectives.find((o) => o.id === 'obj_osm_protect_witness');
+            const collapseObj = newObjectives.find((o) => o.id === 'obj_osm_respond_collapse');
+            if (protectWitnessObj?.isCompleted && collapseObj && !collapseObj.isCompleted) {
+              setTimeout(() => {
+                soundEngine.playBuildingCrack();
+                if (engineRef.current) {
+                  engineRef.current.triggerBuildingCollapseEvent();
+                }
+                setOneSmallMatterModalState((prev) => ({
+                  isOpen: true,
+                  phase: 'stage3_collapse',
+                  earlyChoice: prev?.earlyChoice || 'investigate',
+                }));
+              }, 600);
+            }
+          }
+
+          const nextObj = newObjectives.find((o) => !o.isCompleted && o.targetPos);
+          if (nextObj && nextObj.targetPos && engineRef.current) {
+            engineRef.current.setWaypointPosition(nextObj.targetPos.x, nextObj.targetPos.z, true);
+          }
         }
 
         return anyUpdated ? { ...m, objectives: newObjectives } : m;
@@ -951,6 +1007,34 @@ export default function App() {
     addNotification(`CASE SOLVED: ${c.title}! Grand Jury Indictments Issued (+ $${c.rewardMoney}, +20 Rep)!`, 'success');
   };
 
+  // Collect Forensic Evidence Item
+  const handleCollectEvidence = useCallback((ev: EvidenceItem) => {
+    if (ev.collected) return;
+    soundEngine.playRadioChime();
+    setEvidenceList((prev) =>
+      prev.map((item) => (item.id === ev.id ? { ...item, collected: true } : item))
+    );
+    const nextStats = {
+      ...stats,
+      xp: stats.xp + 250,
+      money: stats.money + 150,
+      evidenceFound: stats.evidenceFound + 1,
+      policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 4),
+    };
+    setStats(nextStats);
+    persistProgressToCloud(nextStats);
+    if (engineRef.current) {
+      engineRef.current.syncDoubleLifeStats(nextStats);
+      engineRef.current.addFloatingText('EVIDENCE SECURED! +250 XP', '#38bdf8', {
+        x: ev.position.x,
+        y: ev.position.y + 0.8,
+        z: ev.position.z,
+      });
+    }
+    handleObjectiveProgress('collect', 1);
+    addNotification(`FORENSIC EVIDENCE SECURED: ${ev.title} (+250 XP, +$150, +4 Rep)`, 'success');
+  }, [stats, persistProgressToCloud, addNotification]);
+
   // Listen for new natural 911 incidents from the City Incident Manager
   useEffect(() => {
     cityIncidentManager.onNewIncident = (ev: DynamicEvent) => {
@@ -1041,6 +1125,27 @@ export default function App() {
     }
   }, []);
 
+  // Off-Duty Waypoint Tracking Handler
+  const handleToggleOffDutyTracking = useCallback(
+    (target: 'precinct' | 'house') => {
+      setOffDutyTracking(target);
+      if (target === 'house') {
+        engineRef.current?.setWaypointPosition(-52, -52, true);
+        addNotification("GPS Waypoint locked to Officer Carter's Residence (-52, -52).", 'info');
+      } else {
+        engineRef.current?.setWaypointPosition(-45, 28, true);
+        addNotification('GPS Waypoint locked to Precinct 9 Headquarters (-45, 28).', 'info');
+      }
+    },
+    [addNotification]
+  );
+
+  // Quick Open Controls & Strategy Field Guide
+  const handleOpenGuide = useCallback(() => {
+    setPauseMenuInitialTab('controls');
+    setIsMenuOpen(true);
+  }, []);
+
   // Interior Interaction Triggered from Game Engine
   const handleTriggerInteriorInteraction = useCallback(
     (interactable: InteriorInteractable) => {
@@ -1074,6 +1179,70 @@ export default function App() {
         soundEngine.playReload();
       } else if (interactable.type === 'duty_desk') {
         addNotification('Precinct 9 Duty Desk: Shift log active. All city patrol sectors monitored.', 'info');
+      } else if (interactable.type === 'bed_sleep') {
+        const cycle: Record<TimeOfDay, TimeOfDay> = {
+          day: 'sunset',
+          sunset: 'night',
+          night: 'day',
+        };
+        setTimeOfDay((prevTime) => {
+          const next = cycle[prevTime] || 'day';
+          engineRef.current?.setTimeOfDay(next);
+          return next;
+        });
+        setStats((prev) => ({
+          ...prev,
+          health: prev.maxHealth,
+          armor: prev.maxArmor,
+        }));
+        if (engineRef.current) {
+          engineRef.current.stats.health = engineRef.current.stats.maxHealth;
+          engineRef.current.stats.armor = engineRef.current.stats.maxArmor;
+        }
+        soundEngine.playRadioChime();
+        addNotification('Rested in bed: Shift hours advanced & health fully restored!', 'success');
+      } else if (interactable.type === 'wardrobe_closet') {
+        const outfits: CustomizationSettings['outfit'][] = ['rookie_patrol', 'tactical_swat', 'detective'];
+        setCustomization((prev) => {
+          const currentIdx = outfits.indexOf(prev.outfit);
+          const nextOutfit = outfits[(currentIdx + 1) % outfits.length];
+          if (engineRef.current) {
+            engineRef.current.setPlayerOutfit(nextOutfit);
+          }
+          addNotification(
+            `Wardrobe: Changed uniform to ${
+              nextOutfit === 'tactical_swat'
+                ? 'Tactical SWAT'
+                : nextOutfit === 'detective'
+                ? 'Undercover Detective'
+                : 'Precinct 9 Patrol'
+            }!`,
+            'info'
+          );
+          return { ...prev, outfit: nextOutfit };
+        });
+        soundEngine.playReload();
+      } else if (interactable.type === 'desk_save') {
+        handleManualSave();
+        soundEngine.playRadioChime();
+        addNotification("Officer Desk: Career saved to Cloud Firestore & Local Storage!", 'success');
+      } else if (interactable.type === 'mission_phone') {
+        soundEngine.playRadioChime();
+        setIsMenuOpen(true);
+        addNotification('Secure Hotline: Accessing Precinct Dossier & Active Warrants.', 'info');
+      } else if (interactable.type === 'kitchen_fridge') {
+        setStats((prev) => ({
+          ...prev,
+          health: Math.min(prev.maxHealth, prev.health + 25),
+        }));
+        if (engineRef.current) {
+          engineRef.current.stats.health = Math.min(
+            engineRef.current.stats.maxHealth,
+            engineRef.current.stats.health + 25
+          );
+        }
+        soundEngine.playRadioChime();
+        addNotification('Kitchen Fridge: Grabbed cold rations & water (+25 HP)!', 'success');
       }
     },
     [activeInterior]
@@ -1329,6 +1498,10 @@ export default function App() {
   handleCallBackupRef.current = handleCallBackup;
   const handleTriggerInteriorInteractionRef = useRef(handleTriggerInteriorInteraction);
   handleTriggerInteriorInteractionRef.current = handleTriggerInteriorInteraction;
+  const evidenceListRef = useRef(evidenceList);
+  evidenceListRef.current = evidenceList;
+  const handleCollectEvidenceRef = useRef(handleCollectEvidence);
+  handleCollectEvidenceRef.current = handleCollectEvidence;
 
   const isMainMenuOpenRef = useRef(isMainMenuOpen);
   isMainMenuOpenRef.current = isMainMenuOpen;
@@ -1390,6 +1563,14 @@ export default function App() {
 
     engine.onTriggerFinalMissionCinematic = (phase = 'phase1_threat') => {
       setFinalMissionCinematic({ isOpen: true, initialPhase: phase });
+    };
+
+    engine.onTriggerOneSmallMatterScene = (phase) => {
+      setOneSmallMatterModalState((prev) => ({
+        isOpen: true,
+        phase,
+        earlyChoice: prev?.earlyChoice || 'investigate',
+      }));
     };
 
     engine.onIncidentResolved = (_inc) => {
@@ -1563,6 +1744,13 @@ export default function App() {
           const hostageNearby = engineRef.current.checkHostageNearbyToRescue();
           if (hostageNearby) {
             engineRef.current.rescueHostage();
+            return;
+          }
+
+          // Check forensic evidence nearby to collect
+          const evidenceNearby = engineRef.current.checkEvidenceNearby(evidenceListRef.current);
+          if (evidenceNearby && !evidenceNearby.collected) {
+            handleCollectEvidenceRef.current(evidenceNearby as any);
             return;
           }
 
@@ -1820,6 +2008,148 @@ export default function App() {
       }
     },
     [stats, persistProgressToCloud, addNotification]
+  );
+
+  // One Small Matter (Chapter 9) Handlers
+  const handleOneSmallMatterEarlyChoice = useCallback(
+    (choice: OneSmallMatterEarlyChoice) => {
+      setOneSmallMatterModalState((prev) => (prev ? { ...prev, earlyChoice: choice } : null));
+      if (choice === 'bribe') {
+        const nextStats: PlayerStats = {
+          ...stats,
+          money: stats.money + 2500,
+          secretEarnings: (stats.secretEarnings ?? 0) + 2500,
+          dirtyCash: (stats.dirtyCash ?? 0) + 2500,
+          underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 15),
+          suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 25),
+          iaViolations: stats.iaViolations + 1,
+        };
+        setStats(nextStats);
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+        addNotification('Accepted $2,500 Sterling payoff envelope. IA suspicion escalated.', 'alert');
+      } else if (choice === 'investigate') {
+        const nextStats: PlayerStats = {
+          ...stats,
+          xp: stats.xp + 150,
+          policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 8),
+          reputation: Math.min(100, stats.reputation + 8),
+        };
+        setStats(nextStats);
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+        addNotification('Whistleblower statement documented. Formal structural probe initiated.', 'success');
+      } else {
+        const nextStats: PlayerStats = {
+          ...stats,
+          suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 10),
+          policeReputation: Math.max(0, (stats.policeReputation ?? stats.reputation) - 5),
+        };
+        setStats(nextStats);
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+        addNotification('Report dismissed without action. Mateo left unprotected.', 'alert');
+      }
+    },
+    [stats, persistProgressToCloud, addNotification]
+  );
+
+  const handleOneSmallMatterDeployToDisaster = useCallback(() => {
+    setOneSmallMatterModalState(null);
+    if (engineRef.current) {
+      engineRef.current.triggerBuildingCollapseEvent();
+      engineRef.current.setWaypointPosition(-24, 38, true);
+    }
+    soundEngine.playRadioChime();
+    addNotification('DISPATCH 10-99: Sterling Heights collapsed! Search & rescue survivors now!', 'alert');
+  }, [addNotification]);
+
+  const handleOneSmallMatterFinalChoice = useCallback(
+    (choice: OneSmallMatterFinalChoice) => {
+      if (choice === 'integrity') {
+        const newXP = stats.xp + 6000;
+        const rankInfo = getRankForXP(newXP);
+        const nextStats: PlayerStats = {
+          ...stats,
+          xp: newXP,
+          money: stats.money + 10000,
+          legitimateEarnings: (stats.legitimateEarnings ?? stats.money) + 10000,
+          rank: rankInfo.rank,
+          rankName: rankInfo.name,
+          policeReputation: 100,
+          reputation: 100,
+          suspicionLevel: Math.max(0, (stats.suspicionLevel ?? 10) - 20),
+          civiliansRescued: stats.civiliansRescued + 3,
+          missionsCompleted: stats.missionsCompleted + 1,
+        };
+        setStats(nextStats);
+        handleSolveCase('case_building_collapse_corruption');
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      } else if (choice === 'settlement') {
+        const nextStats: PlayerStats = {
+          ...stats,
+          money: stats.money + 12000,
+          secretEarnings: (stats.secretEarnings ?? 0) + 12000,
+          dirtyCash: (stats.dirtyCash ?? 0) + 12000,
+          underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 30),
+          suspicionLevel: Math.min(100, (stats.suspicionLevel ?? 10) + 35),
+          iaViolations: stats.iaViolations + 1,
+          policeReputation: Math.max(0, (stats.policeReputation ?? stats.reputation) - 20),
+          civiliansRescued: stats.civiliansRescued + 3,
+          missionsCompleted: stats.missionsCompleted + 1,
+        };
+        setStats(nextStats);
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      } else if (choice === 'manipulate') {
+        const newXP = stats.xp + 4500;
+        const rankInfo = getRankForXP(newXP);
+        const nextStats: PlayerStats = {
+          ...stats,
+          xp: newXP,
+          money: stats.money + 4000,
+          secretEarnings: (stats.secretEarnings ?? 0) + 4000,
+          dirtyCash: (stats.dirtyCash ?? 0) + 4000,
+          rank: rankInfo.rank,
+          rankName: rankInfo.name,
+          policeReputation: Math.min(100, (stats.policeReputation ?? stats.reputation) + 15),
+          underworldReputation: Math.min(100, (stats.underworldReputation ?? 15) + 10),
+          suspicionLevel: Math.max(0, (stats.suspicionLevel ?? 10) - 10),
+          civiliansRescued: stats.civiliansRescued + 3,
+          missionsCompleted: stats.missionsCompleted + 1,
+        };
+        setStats(nextStats);
+        handleSolveCase('case_building_collapse_corruption');
+        persistProgressToCloud(nextStats);
+        if (engineRef.current) engineRef.current.syncDoubleLifeStats(nextStats);
+      }
+    },
+    [stats, persistProgressToCloud]
+  );
+
+  const handleOneSmallMatterRestart = useCallback(() => {
+    setOneSmallMatterModalState(null);
+    handleRestart();
+    const ch9 = missions.find((m) => m.id === 'ch9_one_small_matter');
+    if (ch9 && engineRef.current) {
+      engineRef.current.setMission(ch9);
+      setCurrentMissionId('ch9_one_small_matter');
+    }
+  }, [missions]);
+
+  const handleOneSmallMatterContinueFreeRoam = useCallback(
+    (choice: OneSmallMatterFinalChoice) => {
+      setOneSmallMatterModalState(null);
+      setMissions((prev) =>
+        prev.map((m) => (m.id === 'ch9_one_small_matter' ? { ...m, completed: true } : m))
+      );
+      addNotification(
+        `ONE SMALL MATTER CONCLUDED (${choice.toUpperCase()}). Metro City patrol resumes.`,
+        'success'
+      );
+    },
+    [addNotification]
   );
 
   const handleEnterBuilding = useCallback(() => {
@@ -2291,7 +2621,10 @@ export default function App() {
         isReloading={isReloading}
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
-        onOpenMenu={() => setIsMenuOpen(true)}
+        onOpenMenu={() => {
+          setPauseMenuInitialTab('missions');
+          setIsMenuOpen(true);
+        }}
         onOpenMainMenu={() => setIsMainMenuOpen(true)}
         onOpenCases={() => setIsCasesOpen(true)}
         isFlashlightOn={isFlashlightOn}
@@ -2308,6 +2641,11 @@ export default function App() {
         damageFlash={damageFlash}
         onOpenDualIdentity={() => setIsDualIdentityOpen(true)}
         onExitVehicle={handleExitVehicle}
+        offDutyTracking={offDutyTracking}
+        onToggleOffDutyTracking={handleToggleOffDutyTracking}
+        onOpenGuide={handleOpenGuide}
+        nearbyEvidence={nearbyEvidence}
+        onCollectEvidence={() => nearbyEvidence && handleCollectEvidence(nearbyEvidence)}
       />
 
       {/* MOBILE TOUCH CONTROLS */}
@@ -2335,6 +2673,8 @@ export default function App() {
         onExitVehicle={handleExitVehicle}
         canRescueHostage={!!canRescueHostage}
         onRescueHostage={handleRescueHostage}
+        canCollectEvidence={!!nearbyEvidence && !nearbyEvidence.collected}
+        onCollectEvidence={() => nearbyEvidence && handleCollectEvidence(nearbyEvidence)}
       />
 
       {/* DYNAMIC 911 CALL BANNER */}
@@ -2479,6 +2819,23 @@ export default function App() {
         />
       )}
 
+      {/* CHAPTER 9: ONE SMALL MATTER CINEMATIC & MORAL CLIMAX MODAL */}
+      {oneSmallMatterModalState && (
+        <OneSmallMatterModal
+          isOpen={oneSmallMatterModalState.isOpen}
+          phase={oneSmallMatterModalState.phase}
+          mission={missions.find((m) => m.id === 'ch9_one_small_matter') || missions[0]}
+          stats={stats}
+          earlyChoice={oneSmallMatterModalState.earlyChoice}
+          onSelectEarlyChoice={handleOneSmallMatterEarlyChoice}
+          onDeployToDisaster={handleOneSmallMatterDeployToDisaster}
+          onSelectFinalChoice={handleOneSmallMatterFinalChoice}
+          onRestartMission={handleOneSmallMatterRestart}
+          onContinueFreeRoam={handleOneSmallMatterContinueFreeRoam}
+          onClose={() => setOneSmallMatterModalState(null)}
+        />
+      )}
+
       {/* MISSION BRIEFING MODAL */}
       {currentMission && (
         <MissionBriefingModal
@@ -2492,6 +2849,7 @@ export default function App() {
       <PauseMenu
         isOpen={isMenuOpen}
         onClose={() => setIsMenuOpen(false)}
+        initialTab={pauseMenuInitialTab}
         missions={missions}
         currentMissionId={currentMissionId}
         playerProfile={playerProfile}

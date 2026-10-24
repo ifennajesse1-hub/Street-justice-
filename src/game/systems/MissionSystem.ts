@@ -17,6 +17,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_1',
         description: 'Patrol to the commercial alleyway',
+        hint: 'Follow the golden beacon beam northwest toward the Sector 4 commercial alley.',
         targetType: 'reach',
         targetPos: { x: -28, y: 0, z: -20 },
         currentCount: 0,
@@ -26,6 +27,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_2',
         description: 'Neutralize or arrest 3 street gang suspects',
+        hint: 'Engage suspects using service weapon or non-lethal taser. Shout surrender [G] to take suspects alive.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 3,
@@ -57,6 +59,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_reach_cedar',
         description: "Respond to Marcus's Auto Repair in Cedar Heights",
+        hint: 'Follow the waypoint west through the Cedar Heights Grand Arch to the auto shop.',
         targetType: 'reach',
         targetPos: { x: -60, y: 0, z: -20 },
         currentCount: 0,
@@ -66,6 +69,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_protect_community',
         description: 'Defeat or arrest the 3 Cobalt Skulls extortionists',
+        hint: 'Take cover behind tire stacks or parked vehicles. Neutralize extortionists to protect local merchants.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 3,
@@ -97,6 +101,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_enter_car',
         description: 'Enter your Police Cruiser and engage emergency sirens',
+        hint: 'Head to the precinct avenue curb and press [E] / Enter Vehicle to mount your cruiser.',
         targetType: 'reach',
         targetPos: { x: -25, y: 0, z: 28 },
         currentCount: 0,
@@ -106,6 +111,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_stop_car',
         description: 'Chase down and disable the Cobalt Skulls Getaway Vehicle',
+        hint: 'Toggle sirens [H] to make traffic yield. Ram suspect rear bumper or box in against barriers.',
         targetType: 'chase_stop',
         currentCount: 0,
         requiredCount: 1,
@@ -137,6 +143,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_reach_bank',
         description: 'Advance to Metro Bank Financial Plaza',
+        hint: 'Follow the waypoint east across the main boulevard to 1st National Metro Bank.',
         targetType: 'reach',
         targetPos: { x: 45, y: 0, z: -35 },
         currentCount: 0,
@@ -146,6 +153,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_clear_bank',
         description: 'Neutralize the 4 Eclipse Syndicate operatives',
+        hint: 'Breach the bank plaza. Watch crossfire lines to prevent collateral civilian casualties.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 4,
@@ -177,6 +185,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_boss',
         description: 'Defeat Kingpin "Viper" Vance at the industrial docks',
+        hint: 'Navigate past the shipping containers. Use precision rifle or shotgun bursts against armored boss.',
         targetType: 'kill',
         targetPos: { x: 65, y: 0, z: 65 },
         currentCount: 0,
@@ -210,6 +219,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_spec_ops_reach',
         description: 'Lead Precinct 9 taskforce to the commercial distribution hub',
+        hint: 'Coordinate with SWAT units and advance to the distribution hub waypoint.',
         targetType: 'reach',
         targetPos: { x: -35, y: 0, z: 35 },
         currentCount: 0,
@@ -219,6 +229,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_spec_ops_clear',
         description: 'Neutralize or arrest 4 fortified syndicate operatives',
+        hint: 'Call tactical backup [B] to provide suppressing fire against fortified hostiles.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 4,
@@ -250,6 +261,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_reach_pier4',
         description: 'Respond to the Anonymous Blackmailer at Harbor Pier 4 Warehouse',
+        hint: 'Travel to the secluded warehouse at Pier 4. Stay alert for an ambush.',
         targetType: 'reach',
         targetPos: { x: 50, y: 0, z: 50 },
         currentCount: 0,
@@ -259,6 +271,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_neutralize_mercenaries',
         description: 'Neutralize the 4 Rogue Ambush Mercenaries',
+        hint: 'Use industrial crates as cover. Target high-threat marksmen first.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 4,
@@ -267,6 +280,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_recover_dossier',
         description: 'Recover the Classified Double-Life Blackmail Dossier & Drive',
+        hint: 'Approach the blackmailer desk and press [E] to secure the evidence drive.',
         targetType: 'collect',
         targetPos: { x: 50, y: 0, z: 50 },
         currentCount: 0,
@@ -299,6 +313,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_reach_compound',
         description: 'Advance to the Industrial Logistics Depot Stronghold',
+        hint: 'Follow the waypoint into the stormy compound where Julian Vance is waiting.',
         targetType: 'reach',
         targetPos: { x: 55, y: 0, z: -50 },
         currentCount: 0,
@@ -308,6 +323,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_neutralize_elites',
         description: 'Neutralize the 5 Syndicate Heavy Operatives',
+        hint: 'Defeat Vance elite guards while avoiding hitting the bound civilians.',
         targetType: 'kill',
         currentCount: 0,
         requiredCount: 5,
@@ -316,6 +332,7 @@ export const STORY_MISSIONS: Mission[] = [
       {
         id: 'obj_rescue_hostages',
         description: 'Untie and safely evacuate all 3 captive civilians',
+        hint: 'Approach each hostage citizen and interact [E] to untie them before the final showdown.',
         targetType: 'rescue',
         currentCount: 0,
         requiredCount: 3,
@@ -345,6 +362,103 @@ export const STORY_MISSIONS: Mission[] = [
         description: 'Refuse the syndicate\'s deal. Fight through the compound and rescue the hostages at all costs.',
         effect: 'Triggers Climax: "HE SAVED THEIR LIVES. NOW HE MUST TRUST THE DEVIL."',
         reputationBonus: 50,
+      },
+    },
+  },
+  {
+    id: 'ch9_one_small_matter',
+    chapter: 9,
+    title: 'Chapter 9: ONE SMALL MATTER',
+    subtitle: 'The Sterling Heights Collapse & Corruption Web',
+    description: 'Whistleblower construction worker Mateo Cruz warns that developer Arthur Sterling is cutting structural supports with substandard materials at Lot 14B while bribing building inspector Pike. When the tower partially collapses, Carter must lead search-and-rescue, call police backup, collect forensic evidence, and choose whether to uphold the badge, take hush money, or manipulate both sides.',
+    mode: 'story',
+    rewardMoney: 8500,
+    rewardXP: 5000,
+    requiredRank: 1,
+    unlocked: true,
+    completed: false,
+    objectives: [
+      {
+        id: 'obj_osm_meet_mateo',
+        description: 'Meet construction whistleblower Mateo Cruz at the Sterling Heights site',
+        hint: 'Follow the golden beacon east of Precinct 9 to the Lot 14B construction site gate.',
+        targetType: 'reach',
+        targetPos: { x: -24, y: 0.22, z: 38 },
+        currentCount: 0,
+        requiredCount: 1,
+        isCompleted: false,
+      },
+      {
+        id: 'obj_osm_protect_witness',
+        description: "Defeat or arrest Sterling's 3 intimidation enforcers",
+        hint: 'Enforcers are cornering Mateo behind the construction trailer. Neutralize or order surrender.',
+        targetType: 'kill',
+        currentCount: 0,
+        requiredCount: 3,
+        isCompleted: false,
+      },
+      {
+        id: 'obj_osm_respond_collapse',
+        description: 'Respond to catastrophic structural failure at the Sterling Heights tower!',
+        hint: 'The building is groaning and shearing! Rush to the disaster zone to secure the perimeter.',
+        targetType: 'reach',
+        targetPos: { x: -24, y: 0.22, z: 38 },
+        currentCount: 0,
+        requiredCount: 1,
+        isCompleted: false,
+      },
+      {
+        id: 'obj_osm_rescue_survivors',
+        description: 'Rescue all 3 trapped civilians from the collapsed rubble',
+        hint: 'Approach trapped survivors Leo, Sarah, and Foreman Davies. Press [E] / Rescue to extract them.',
+        targetType: 'rescue',
+        currentCount: 0,
+        requiredCount: 3,
+        isCompleted: false,
+      },
+      {
+        id: 'obj_osm_secure_evidence_safe',
+        description: 'Neutralize 3 Syndicate Fixers attempting to burn the site trailer records',
+        hint: 'Sterling sent armed arson fixers to destroy the site safe. Protect the crime scene!',
+        targetType: 'kill',
+        currentCount: 0,
+        requiredCount: 3,
+        isCompleted: false,
+      },
+      {
+        id: 'obj_osm_collect_forensics',
+        description: 'Collect 3 key forensic evidence items from the disaster site',
+        hint: 'Inspect the damaged trailer safe, sheared column C4, and dropped town car bribery slip.',
+        targetType: 'collect',
+        currentCount: 0,
+        requiredCount: 3,
+        isCompleted: false,
+      },
+    ],
+    dialogueIntro: [
+      'Mateo Cruz: "Officer Carter! Thank god you came. I\'m an ironworker at Lot 14B. Sterling Developments is using brittle, rusted rebar and diluted concrete to pocket millions. Column C4 is already failing!"',
+      'Alex Carter: "Did you notify the Department of Buildings, Mateo? That\'s a municipal safety issue."',
+      'Mateo Cruz: "I gave the inspection report to Inspector Howard Pike this morning. Pike walked into developer Arthur Sterling\'s trailer, came out with a fat white envelope, and laughed in my face. He called it \'just one small matter\'! If they pour the upper floor slab, the whole front will collapse!"',
+      'Alex Carter: "Show me the pillar, Mateo. If there\'s criminal negligence and city hall bribery here, nobody is sweeping it under the rug on my watch."',
+    ],
+    dialogueOutro: [
+      'Foreman Davies: "Carter... you got us out alive. Arthur Sterling knew that column was sheared... the altered batching receipts are in his trailer safe."',
+      'Alex Carter: "Hang on Davies, paramedics are on the scene. Sterling and his corrupt inspectors are going to answer for every single ounce of concrete that fell today."',
+    ],
+    choice: {
+      id: 'choice_one_small_matter',
+      prompt: "THE COLLAPSE VERDICT: CHOOSE CARTER'S COURSE",
+      optionA: {
+        label: 'CHOICE A: THE LAW IS ABSOLUTE',
+        description: 'Refuse all hush money. Arrest Arthur Sterling and Inspector Pike. Deliver all forensic evidence to the District Attorney.',
+        effect: 'Triggers Ending: "THE PILLARS OF JUSTICE" (+40 Police Rep, +$6,000 Legitimate Bonus)',
+        reputationBonus: 40,
+      },
+      optionB: {
+        label: 'CHOICE B: THE SHADOW SETTLEMENT',
+        description: 'Accept Sterling\'s $12,000 cash briefcase. Destroy the payoff slip and blame an absent material supplier.',
+        effect: 'Triggers Ending: "THE SILENT SPECULATOR" (+40 Underworld Rep, +$12,000 Dirty Cash, +25 Suspicion)',
+        reputationBonus: -30,
       },
     },
   },

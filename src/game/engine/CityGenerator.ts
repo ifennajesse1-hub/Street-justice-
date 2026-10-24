@@ -23,6 +23,7 @@ export interface CityBuildResult {
     harbor: THREE.Vector3;
     cedarHeights: THREE.Vector3;
     militaryCheckpoint: THREE.Vector3;
+    carterHouse?: THREE.Vector3;
     enemies: THREE.Vector3[];
     civilians: THREE.Vector3[];
   };
@@ -1194,7 +1195,150 @@ export function generateCityDistrict(): CityBuildResult {
   );
   purpleDisplay.position.set(0, 1.1, 0.41);
   syndicateBreachGroup.add(purpleDisplay);
-  cedarHeightsGroup.add(syndicateBreachGroup);
+  // 7B-2. OFFICER CARTER'S RESIDENCE (X: -52, Z: -52)
+  // Two-story craftsman brownstone with private driveway, parking bay,
+  // front porch, steps, illuminated windows, and front entrance marker.
+  const carterHouseGroup = new THREE.Group();
+  carterHouseGroup.position.set(-52, 0, -52);
+
+  // Lot Foundation & Paver Walkway
+  createSidewalkBlock(-52, -52, 22, 22);
+
+  // Private Driveway on East side
+  const drivewayMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(6, 18),
+    asphaltMat
+  );
+  drivewayMesh.rotation.x = -Math.PI / 2;
+  drivewayMesh.position.set(7.5, 0.225, 0);
+  drivewayMesh.receiveShadow = true;
+  carterHouseGroup.add(drivewayMesh);
+
+  // Main House Building Body (12m W x 9m H x 12m D)
+  const houseMat = new THREE.MeshStandardMaterial({
+    color: 0x475569, // Clean slate blue-gray craftsman siding
+    roughness: 0.8,
+  });
+  const houseMesh = new THREE.Mesh(new THREE.BoxGeometry(12, 9.0, 12), houseMat);
+  houseMesh.position.set(0, 4.5, -2);
+  houseMesh.castShadow = true;
+  houseMesh.receiveShadow = true;
+  carterHouseGroup.add(houseMesh);
+  addCollision(-52, -54, 12, 12, 9.0);
+
+  // Peaked Roof Trim & Shingles
+  const roofMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.9,
+  });
+  const roofMesh = new THREE.Mesh(new THREE.ConeGeometry(9.5, 3.8, 4), roofMat);
+  roofMesh.rotation.y = Math.PI / 4;
+  roofMesh.position.set(0, 10.9, -2);
+  roofMesh.castShadow = true;
+  carterHouseGroup.add(roofMesh);
+
+  // Front Porch Platform
+  const porchMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f, // Rich dark oak deck
+    roughness: 0.7,
+  });
+  const porchMesh = new THREE.Mesh(new THREE.BoxGeometry(8, 0.5, 3.5), porchMat);
+  porchMesh.position.set(0, 0.45, 5.5);
+  porchMesh.castShadow = true;
+  porchMesh.receiveShadow = true;
+  carterHouseGroup.add(porchMesh);
+  addCollision(-52, -46.5, 8, 3.5, 1.2, 'barrier');
+
+  // Porch Steps leading to driveway/sidewalk
+  const stepsMesh = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.25, 1.4), porchMat);
+  stepsMesh.position.set(0, 0.22, 7.6);
+  carterHouseGroup.add(stepsMesh);
+
+  // Porch Roof Canopy
+  const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.3, 3.8), roofMat);
+  porchRoof.position.set(0, 3.6, 5.5);
+  porchRoof.rotation.x = -0.08;
+  carterHouseGroup.add(porchRoof);
+
+  // 4 Porch Wooden Support Columns
+  [-3.6, 3.6].forEach((cx) => {
+    [4.2, 6.8].forEach((cz) => {
+      const col = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.2, 0.24), concreteFacadeMat);
+      col.position.set(cx, 1.8, cz);
+      col.castShadow = true;
+      carterHouseGroup.add(col);
+    });
+  });
+
+  // Front Oak Entrance Door
+  const doorMat = new THREE.MeshStandardMaterial({
+    color: 0x991b1b, // Bold welcoming deep burgundy craftsman door
+    roughness: 0.6,
+  });
+  const doorMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.8, 0.2), doorMat);
+  doorMesh.position.set(0, 1.85, 4.0);
+  carterHouseGroup.add(doorMesh);
+
+  // Door Knob Brass
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), neonGoldMat);
+  knob.position.set(0.6, 1.7, 4.15);
+  carterHouseGroup.add(knob);
+
+  // Residence Gold Plaque: "CARTER · 247 PINE ST"
+  const plaque = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.35, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.8, roughness: 0.3 })
+  );
+  plaque.position.set(0, 3.1, 4.05);
+  carterHouseGroup.add(plaque);
+
+  // Porch Lantern with Warm Golden Glow
+  const porchLantern = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.16, 0.35, 8),
+    new THREE.MeshBasicMaterial({ color: 0xfef08a })
+  );
+  porchLantern.position.set(0, 3.2, 4.8);
+  carterHouseGroup.add(porchLantern);
+
+  const porchLight = new THREE.PointLight(0xfef08a, 1.8, 14);
+  porchLight.position.set(0, 3.0, 5.0);
+  carterHouseGroup.add(porchLight);
+
+  // Warm Windows with internal glow
+  [
+    { x: -3.5, y: 2.2, z: 4.05, w: 2.2, h: 2.0 },
+    { x: 3.5, y: 2.2, z: 4.05, w: 2.2, h: 2.0 },
+    { x: -3.5, y: 6.2, z: 4.05, w: 2.2, h: 2.0 },
+    { x: 3.5, y: 6.2, z: 4.05, w: 2.2, h: 2.0 },
+    { x: 0, y: 6.2, z: 4.05, w: 1.8, h: 1.8 },
+  ].forEach((win) => {
+    const winMesh = new THREE.Mesh(new THREE.BoxGeometry(win.w, win.h, 0.1), warmWindowMat);
+    winMesh.position.set(win.x, win.y, win.z);
+    carterHouseGroup.add(winMesh);
+  });
+
+  // Mailbox on Post at end of walkway
+  const mailboxPost = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.2, 8), metalDarkMat);
+  mailboxPost.position.set(4.0, 0.6, 9.0);
+  carterHouseGroup.add(mailboxPost);
+
+  const mailbox = new THREE.Mesh(
+    new THREE.BoxGeometry(0.35, 0.35, 0.65),
+    new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.6, roughness: 0.4 })
+  );
+  mailbox.position.set(4.0, 1.2, 9.0);
+  carterHouseGroup.add(mailbox);
+  addCollision(-48, -43, 0.5, 0.5, 1.2, 'prop');
+
+  // Front Garden Shrubbery Hedge
+  const hedgeMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.8 });
+  [-5.5, -4.5, 4.5, 5.5].forEach((hx) => {
+    const bush = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65), hedgeMat);
+    bush.position.set(hx, 0.65, 7.0);
+    carterHouseGroup.add(bush);
+  });
+
+  cedarHeightsGroup.add(carterHouseGroup);
 
   sceneGroup.add(cedarHeightsGroup);
 
@@ -1454,6 +1598,104 @@ export function generateCityDistrict(): CityBuildResult {
     addCollision(hs.x, hs.z, 0.4, 0.4, 0.8, 'prop');
   });
 
+  // ----------------------------------------------------
+  // 9. THE STERLING HEIGHTS CONSTRUCTION SITE (Lot 14B)
+  // Scene for "One Small Matter" mission:
+  // Substandard concrete tower frame, scaffolding, jobsite trailer,
+  // caution fencing, crane tower mast, and material pallets.
+  // ----------------------------------------------------
+  const lot14Group = new THREE.Group();
+  lot14Group.position.set(-24, 0, 48);
+
+  // Gravel/concrete work surface lot (X: -36 to -12, Z: 36 to 60)
+  createSidewalkBlock(-24, 48, 26, 26);
+
+  // Main Concrete Tower Frame (18m W x 16m H x 14m D)
+  const towerFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x475569,
+    roughness: 0.85,
+    metalness: 0.1,
+  });
+  const towerBody = new THREE.Mesh(new THREE.BoxGeometry(18, 16, 14), towerFrameMat);
+  towerBody.position.set(0, 8.0, 2);
+  towerBody.castShadow = true;
+  towerBody.receiveShadow = true;
+  lot14Group.add(towerBody);
+  addCollision(-24, 50, 18, 14, 16);
+
+  // Structural Floor Slabs (Exposed raw concrete balconies)
+  for (let fl = 1; fl <= 3; fl++) {
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(19, 0.45, 15), concreteFacadeMat);
+    slab.position.set(0, fl * 4.8, 2);
+    lot14Group.add(slab);
+  }
+
+  // Exposed Rusted Steel Rebar Columns on Roof Slab
+  const rebarMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9, metalness: 0.5 });
+  [-7, -3.5, 3.5, 7].forEach((rx) => {
+    [-4, 4].forEach((rz) => {
+      const rebar = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3.2, 6), rebarMat);
+      rebar.position.set(rx, 17.6, 2 + rz);
+      lot14Group.add(rebar);
+    });
+  });
+
+  // Critical Fault Pillar C4 (Southwest corner pillar marked with hairline cracks)
+  const faultPillar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 5.0, 1.6), concreteFacadeMat);
+  faultPillar.position.set(-8.2, 2.5, -4.5);
+  lot14Group.add(faultPillar);
+  addCollision(-32.2, 43.5, 1.6, 1.6, 5.0, 'prop');
+
+  // Red stress crack indicator decal on Pillar C4
+  const crackDecal = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.8, 3.5),
+    new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.75 })
+  );
+  crackDecal.position.set(-8.2, 2.5, -3.68);
+  lot14Group.add(crackDecal);
+
+  // Jobsite Office Trailer (Site Manager's Trailer with safe inside)
+  const trailerMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6, metalness: 0.2 });
+  const trailerMesh = new THREE.Mesh(new THREE.BoxGeometry(6.2, 3.2, 3.6), trailerMat);
+  trailerMesh.position.set(-9.0, 1.6, -7.5);
+  trailerMesh.castShadow = true;
+  lot14Group.add(trailerMesh);
+  addCollision(-33, 40.5, 6.2, 3.6, 3.2);
+
+  // Trailer Door & Steps
+  const trailerDoor = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.0, 2.1),
+    new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+  );
+  trailerDoor.position.set(-9.0, 1.45, -5.68);
+  lot14Group.add(trailerDoor);
+
+  const trailerSteps = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 1.0), metalGalvanized);
+  trailerSteps.position.set(-9.0, 0.2, -4.8);
+  lot14Group.add(trailerSteps);
+
+  // Construction Perimeter Safety Barrier & Caution Tape Signs
+  const fenceMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.6 });
+  const fenceNorth = new THREE.Mesh(new THREE.BoxGeometry(24, 1.6, 0.2), fenceMat);
+  fenceNorth.position.set(0, 0.8, -11.5);
+  lot14Group.add(fenceNorth);
+  addCollision(-24, 36.5, 24, 0.4, 1.6, 'barrier');
+
+  // Safety Signboard: "LOT 14B · STERLING DEVELOPMENTS · STERLING HEIGHTS"
+  const signMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(5.5, 1.8, 0.2),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
+  );
+  signMesh.position.set(0, 2.4, -11.4);
+  lot14Group.add(signMesh);
+
+  // Flashing Warning Beacon on Fence Corner
+  const warningLight = new THREE.PointLight(0xf59e0b, 1.5, 8);
+  warningLight.position.set(-11, 2.2, -11.5);
+  lot14Group.add(warningLight);
+
+  sceneGroup.add(lot14Group);
+
   return {
     sceneGroup,
     skyMesh: skyDome,
@@ -1467,6 +1709,8 @@ export function generateCityDistrict(): CityBuildResult {
       policeStation: new THREE.Vector3(policeX, 0, policeZ),
       harbor: new THREE.Vector3(whX + 20, 0, whZ + 20),
       cedarHeights: new THREE.Vector3(-60, 0.20, 0),
+      carterHouse: new THREE.Vector3(-52, 0.20, -44),
+      constructionSite: new THREE.Vector3(-24, 0.20, 38),
       militaryCheckpoint: new THREE.Vector3(20, 0.20, 16),
       enemies: [
         new THREE.Vector3(38, 0, 30),

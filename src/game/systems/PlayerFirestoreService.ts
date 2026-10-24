@@ -51,7 +51,14 @@ export async function fetchPlayerProfile(userId: string): Promise<PlayerCloudDoc
     }
     return snap.data() as PlayerCloudDocument;
   } catch (error: any) {
-    if (error?.code === 'unavailable' || String(error?.message || '').includes('offline') || String(error?.message || '').includes('unavailable')) {
+    if (
+      error?.code === 'unavailable' ||
+      String(error?.message || '').includes('offline') ||
+      String(error?.message || '').includes('unavailable') ||
+      String(error?.message || '').includes('Could not reach') ||
+      String(error?.message || '').includes('Backend didn\'t respond') ||
+      String(error?.message || '').includes('timed out')
+    ) {
       console.warn('Firestore offline or unreachable, running in local offline storage mode.');
       return null;
     }
@@ -109,7 +116,14 @@ export async function createPlayerProfile(
   try {
     await setDoc(docRef, payload);
   } catch (error: any) {
-    if (error?.code === 'unavailable' || String(error?.message || '').includes('offline') || String(error?.message || '').includes('unavailable')) {
+    if (
+      error?.code === 'unavailable' ||
+      String(error?.message || '').includes('offline') ||
+      String(error?.message || '').includes('unavailable') ||
+      String(error?.message || '').includes('Could not reach') ||
+      String(error?.message || '').includes('Backend didn\'t respond') ||
+      String(error?.message || '').includes('timed out')
+    ) {
       console.warn('Firestore offline or unreachable during profile create, queued for local sync.');
       return;
     }
@@ -165,7 +179,14 @@ export async function updatePlayerProfile(
   try {
     await updateDoc(docRef, payload);
   } catch (error: any) {
-    if (error?.code === 'unavailable' || String(error?.message || '').includes('offline') || String(error?.message || '').includes('unavailable')) {
+    if (
+      error?.code === 'unavailable' ||
+      String(error?.message || '').includes('offline') ||
+      String(error?.message || '').includes('unavailable') ||
+      String(error?.message || '').includes('Could not reach') ||
+      String(error?.message || '').includes('Backend didn\'t respond') ||
+      String(error?.message || '').includes('timed out')
+    ) {
       console.warn('Firestore offline or unreachable during profile update, continuing locally.');
       return;
     }

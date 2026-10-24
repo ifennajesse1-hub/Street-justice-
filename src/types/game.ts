@@ -262,6 +262,7 @@ export interface DynamicEvent {
 export interface MissionObjective {
   id: string;
   description: string;
+  hint?: string;
   targetType: 'kill' | 'arrest' | 'reach' | 'chase_stop' | 'collect' | 'photograph' | 'interrogate' | 'rescue';
   targetPos?: { x: number; y: number; z: number };
   currentCount: number;

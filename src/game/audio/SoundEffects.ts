@@ -671,6 +671,50 @@ class SoundEngine {
     noise.stop(t + 0.6);
   }
 
+  // Structural building crack / concrete stress rumble
+  public playBuildingCrack() {
+    if (this.isMuted) return;
+    if (!this.checkThrottle('building_crack', 0.5)) return;
+    const dest = this.getDestinationNode();
+    if (!dest || !this.ctx) return;
+
+    const t = this.ctx.currentTime;
+    // Sub rumble
+    const rumble = this.ctx.createOscillator();
+    const rumbleGain = this.ctx.createGain();
+    rumble.type = 'sawtooth';
+    rumble.frequency.setValueAtTime(65, t);
+    rumble.frequency.exponentialRampToValueAtTime(28, t + 1.2);
+    rumbleGain.gain.setValueAtTime(0.28, t);
+    rumbleGain.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    rumble.connect(rumbleGain);
+    rumbleGain.connect(dest);
+    rumble.start(t);
+    rumble.stop(t + 1.2);
+
+    // Sharp snapping noise
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.4);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.08));
+    }
+    const snap = this.ctx.createBufferSource();
+    snap.buffer = buffer;
+    const snapFilter = this.ctx.createBiquadFilter();
+    snapFilter.type = 'bandpass';
+    snapFilter.frequency.setValueAtTime(1400, t);
+    snapFilter.Q.setValueAtTime(3.0, t);
+    const snapGain = this.ctx.createGain();
+    snapGain.gain.setValueAtTime(0.35, t);
+    snapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    snap.connect(snapFilter);
+    snapFilter.connect(snapGain);
+    snapGain.connect(dest);
+    snap.start(t + 0.05);
+    snap.stop(t + 0.45);
+  }
+
   // Police Siren loop (warm, 1200Hz lowpass filtered, volume 0.075)
   public toggleSiren(active?: boolean): boolean {
     if (active === undefined) {

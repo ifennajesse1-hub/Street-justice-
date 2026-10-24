@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Crosshair,
@@ -30,6 +30,12 @@ import {
   Pause,
   Play,
   Sparkles,
+  Keyboard,
+  HelpCircle,
+  BookOpen,
+  Smartphone,
+  Bed,
+  Home,
 } from 'lucide-react';
 import { Mission, WeaponConfig, PlayerStats, TimeOfDay, WeatherType, CustomizationSettings, EvidenceItem, DynamicEvent, PlayerProfileSettings } from '../types/game';
 import { RANKS, getRankForXP } from '../game/systems/ProgressionSystem';
@@ -39,9 +45,21 @@ import { cityIncidentManager } from '../game/systems/DynamicEventsSystem';
 import { Cloud, RotateCw, LogIn, LogOut, CheckCircle, Database } from 'lucide-react';
 import { TrackInfo, MusicTheme, SOUNDTRACK_TRACKS } from '../game/audio/CinematicMusicEngine';
 
+export type PauseMenuTab =
+  | 'missions'
+  | 'dispatch'
+  | 'cases'
+  | 'armory'
+  | 'factions'
+  | 'profile'
+  | 'locker'
+  | 'controls'
+  | 'settings';
+
 interface PauseMenuProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: PauseMenuTab;
   missions: Mission[];
   currentMissionId?: string;
   playerProfile?: PlayerProfileSettings;
@@ -127,9 +145,16 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onLogout,
   onManualSave,
   onRespondIncident,
+  initialTab = 'missions',
 }) => {
-  const [activeTab, setActiveTab] = useState<'missions' | 'dispatch' | 'cases' | 'armory' | 'factions' | 'profile' | 'locker' | 'settings'>('missions');
+  const [activeTab, setActiveTab] = useState<PauseMenuTab>(initialTab);
   const [selectedFactionId, setSelectedFactionId] = useState<string>('cedar_heights');
+
+  useEffect(() => {
+    if (initialTab && isOpen) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, isOpen]);
 
   if (!isOpen) return null;
 
@@ -259,6 +284,17 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             }`}
           >
             Customization
+          </button>
+          <button
+            onClick={() => setActiveTab('controls')}
+            className={`px-3.5 py-2 font-['Chakra_Petch'] font-bold text-xs tracking-wider uppercase border-b-2 whitespace-nowrap transition-all flex items-center gap-1.5 ${
+              activeTab === 'controls'
+                ? 'border-cyan-500 text-cyan-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+            <span>Controls & Field Guide</span>
           </button>
           <button
             onClick={() => setActiveTab('settings')}
@@ -1524,6 +1560,212 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                       </button>
                     );
                   })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: CONTROLS & FIELD GUIDE */}
+          {activeTab === 'controls' && (
+            <div className="space-y-6">
+              {/* Header Banner & Replay Tutorial */}
+              <div className="p-4 bg-gradient-to-r from-cyan-950/60 via-slate-900 to-blue-950/50 border border-cyan-800/60 rounded-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-cyan-400" />
+                    <span className="font-['Chakra_Petch'] font-bold text-sm text-cyan-200 tracking-wider uppercase">
+                      Precinct 9 Tactical Field Manual & Controls
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed max-w-xl">
+                    Standard operating procedures for Officer Alex Carter. Master urban pursuit, tactical arrest protocols, vehicle operations, and Carter's private residence amenities.
+                  </p>
+                </div>
+                {onPlayPrologue && (
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onPlayPrologue();
+                    }}
+                    className="px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white rounded-lg font-['Chakra_Petch'] font-bold text-xs uppercase tracking-wider shrink-0 flex items-center gap-1.5 shadow-md transition-all active:scale-95"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Play Academy Tutorial</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Controls Grid: Keyboard & Mobile */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Keyboard & Mouse */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-slate-800/80 pb-2">
+                    <Keyboard className="w-4 h-4 text-blue-400" />
+                    <h3 className="font-['Chakra_Petch'] font-bold text-xs uppercase text-slate-200 tracking-wider">
+                      Keyboard & Mouse Patrol Controls
+                    </h3>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Move / Strafe</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">W A S D</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Sprint</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">Shift</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Tactical Crouch</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">C</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Jump / Handbrake</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">Space</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Fire / Attack</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">L-Click</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Aim Weapon</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">R-Click</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Reload Ammo</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">R</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Weapon Wheel</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-blue-300 font-mono text-[10px] font-bold">1 - 5</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Enter / Exit Vehicle</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono text-[10px] font-bold">F</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Interact / Doors</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300 font-mono text-[10px] font-bold">E</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Order Surrender</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono text-[10px] font-bold">T</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Siren & Horn</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-red-300 font-mono text-[10px] font-bold">G / H</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Mission Hints (Journal)</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 font-mono text-[10px] font-bold">H</kbd>
+                    </div>
+                    <div className="p-2 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-400">Flashlight</span>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px] font-bold">L</kbd>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mobile Touch & Navigation */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-slate-800/80 pb-2">
+                    <Smartphone className="w-4 h-4 text-cyan-400" />
+                    <h3 className="font-['Chakra_Petch'] font-bold text-xs uppercase text-slate-200 tracking-wider">
+                      Mobile Touch & Guidance HUD
+                    </h3>
+                  </div>
+                  <div className="space-y-2 text-xs text-slate-300">
+                    <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80 space-y-1">
+                      <div className="font-['Chakra_Petch'] font-bold text-cyan-300 text-[11px] uppercase">
+                        Left Joystick & Right Pan
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Drag the left thumb stick to move or drive. Drag the right half of the screen to rotate camera and aim firearms smoothly.
+                      </p>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80 space-y-1">
+                      <div className="font-['Chakra_Petch'] font-bold text-amber-300 text-[11px] uppercase">
+                        Context Action Buttons
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        When standing near vehicles, doors, suspects, or furniture, context buttons appear automatically. Tap "ENTER", "INTERACT", or "ARREST" without searching for hotkeys.
+                      </p>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80 space-y-1">
+                      <div className="font-['Chakra_Petch'] font-bold text-emerald-300 text-[11px] uppercase">
+                        GPS Waypoint & Objective Banner
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Tap the glowing objective bar at the top of the screen anytime to reveal your distance, bearing, and expanded situational hints.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Carter's Residence Safehouse Guide */}
+              <div className="bg-slate-900/40 border border-cyan-900/50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Home className="w-4 h-4 text-cyan-400" />
+                    <h3 className="font-['Chakra_Petch'] font-bold text-xs uppercase text-slate-200 tracking-wider">
+                      Officer Carter's Residence · Amenities Guide (-52, -52)
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-mono text-cyan-400 font-semibold bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60">
+                    Cedar Heights Sector
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                  <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                    <div className="flex items-center gap-1.5 text-blue-400 font-['Chakra_Petch'] font-bold text-xs uppercase">
+                      <Bed className="w-3.5 h-3.5" />
+                      <span>Bed (Sleep)</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Rest to advance in-game time (Day → Sunset → Night) and fully restore Health and Armor.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                    <div className="flex items-center gap-1.5 text-amber-400 font-['Chakra_Petch'] font-bold text-xs uppercase">
+                      <User className="w-3.5 h-3.5" />
+                      <span>Wardrobe</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Cycle between Precinct 9 Patrol Uniform, Tactical SWAT armor, and Undercover Detective suit.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                    <div className="flex items-center gap-1.5 text-emerald-400 font-['Chakra_Petch'] font-bold text-xs uppercase">
+                      <Database className="w-3.5 h-3.5" />
+                      <span>Study Desk</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Manual career save checkpoint synced safely to Cloud Firestore and Local Storage.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                    <div className="flex items-center gap-1.5 text-purple-400 font-['Chakra_Petch'] font-bold text-xs uppercase">
+                      <Radio className="w-3.5 h-3.5" />
+                      <span>Mission Phone</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Encrypted dispatch hotline to view precinct warrants, active syndicates, and case dossiers.
+                    </p>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                    <div className="flex items-center gap-1.5 text-cyan-400 font-['Chakra_Petch'] font-bold text-xs uppercase">
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Kitchen Fridge</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      Replenish cold rations and electrolytes to restore +25 HP during grueling investigation shifts.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

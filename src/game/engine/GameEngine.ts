@@ -143,8 +143,11 @@ export class GameEngine {
   public onEventMoralChoiceAvailable?: (event: DynamicEvent) => void;
   public onOpenArrestEvidenceModal?: (enemy: EnemyEntity) => void;
   public onWitnessMisconductAlert?: (civilian: CivilianEntity, actionDescription: string) => void;
-  public onPedestrianShout?: (civ: CivilianEntity, text: string) => void;
   public onTriggerFinalMissionCinematic?: (phase?: 'phase1_threat' | 'phase2_climax_handshake') => void;
+  public onTriggerOneSmallMatterScene?: (phase: 'stage1_whistleblower' | 'stage3_collapse' | 'stage6_confrontation') => void;
+  public isBuildingCollapsed: boolean = false;
+  public collapsedRubbleGroup: THREE.Group | null = null;
+  public oneSmallMatterMateoRig?: CharacterRig;
 
   // Enterable Buildings & 3D Interior Simulation
   public activeInterior: ActiveInteriorState | null = null;
@@ -744,6 +747,54 @@ export class GameEngine {
       });
       this.missionEnemies = [];
 
+      const isOneSmallMatter = mission.id === 'ch9_one_small_matter';
+      if (isOneSmallMatter) {
+        const meetMateoObj = mission.objectives.find((o) => o.id === 'obj_osm_meet_mateo');
+        const collapseObj = mission.objectives.find((o) => o.id === 'obj_osm_respond_collapse');
+
+        if (meetMateoObj && !meetMateoObj.isCompleted) {
+          // 1. Spawn Mateo Cruz at site entrance (-24, 0, 38)
+          if (!this.oneSmallMatterMateoRig) {
+            const mRig = createCharacterMesh('civilian', 'street_youth_marcus', 'Mateo Cruz');
+            mRig.root.position.set(-24, 0, 38);
+            this.scene.add(mRig.root);
+            this.oneSmallMatterMateoRig = mRig;
+          }
+
+          // 2. Spawn 3 Sterling Intimidation Enforcers near trailer
+          const enforcers = [
+            { name: 'Sterling Enforcer Hammer', type: 'enforcer' as const, pos: new THREE.Vector3(-28, 0, 42) },
+            { name: 'Sterling Guard Knox', type: 'enforcer' as const, pos: new THREE.Vector3(-31, 0, 44) },
+            { name: 'Sterling Thug Brick', type: 'thug' as const, pos: new THREE.Vector3(-26, 0, 40) },
+          ];
+
+          enforcers.forEach((c) => {
+            const rig = createCharacterMesh(c.type, 'default', c.name, 'eclipse_syndicate');
+            this.scene.add(rig.root);
+            const enemy = this.ai.spawnEnemy(c.type, c.pos, rig, c.name, 'eclipse_syndicate');
+            enemy.alertLevel = 100;
+            this.missionEnemies.push(enemy);
+            enc.spawnedEnemyIds.push(enemy.id);
+          });
+
+          this.onTriggerOneSmallMatterScene?.('stage1_whistleblower');
+          this.onMissionObjectiveProgress?.('reach', 1);
+
+          this.onNotification?.(
+            "WHISTLEBLOWER THREAT: Neutralize or order surrender of Sterling's enforcers behind trailer!",
+            'alert'
+          );
+          return;
+        }
+
+        if (collapseObj && !collapseObj.isCompleted) {
+          this.triggerBuildingCollapseEvent();
+          this.onTriggerOneSmallMatterScene?.('stage3_collapse');
+          this.onMissionObjectiveProgress?.('reach', 1);
+          return;
+        }
+      }
+
       const isFinalChapter = mission.id === 'ch8_death_before_betrayal';
       const isBoss = mission.id === 'ch5_viper_showdown';
       const isSyndicate = mission.id === 'ch4_bank_hostage';
@@ -862,6 +913,141 @@ export class GameEngine {
         );
       }
     });
+  }
+
+  /**
+   * Triggers the scripted 3D building collapse event for "One Small Matter":
+   * Camera shake, crumbling rubble, dust clouds, crushed vehicles,
+   * 3 trapped survivors (Leo, Sarah, Davies), syndicate fixers, and forensic evidence collectibles!
+   */
+  public triggerBuildingCollapseEvent() {
+    if (this.isBuildingCollapsed) return;
+    this.isBuildingCollapsed = true;
+
+    // 1. Audio & Camera Earthquake Shake
+    soundEngine.playBuildingCrack();
+    soundEngine.playExplosion();
+    soundEngine.toggleSiren(true);
+    this.cameraShakeAmount = 0.95;
+
+    // 2. 3D Rubble & Collapse Geometry
+    const rubbleGroup = new THREE.Group();
+    rubbleGroup.position.set(-24, 0, 48);
+
+    const concreteRubbleMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.9,
+      metalness: 0.1,
+    });
+    const rebarTwistMat = new THREE.MeshStandardMaterial({
+      color: 0x78350f,
+      roughness: 0.8,
+      metalness: 0.6,
+    });
+
+    // Tilted shattered concrete roof slab
+    const fallenSlab = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.9, 6.2), concreteRubbleMat);
+    fallenSlab.position.set(-3.5, 1.2, -4.5);
+    fallenSlab.rotation.set(0.18, 0.22, -0.25);
+    fallenSlab.castShadow = true;
+    fallenSlab.receiveShadow = true;
+    rubbleGroup.add(fallenSlab);
+
+    // Secondary crushed masonry pile
+    const masonryPile = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.4, 4.8), concreteRubbleMat);
+    masonryPile.position.set(2.8, 0.7, -5.2);
+    masonryPile.rotation.set(-0.12, 0.35, 0.1);
+    rubbleGroup.add(masonryPile);
+
+    // Twisted steel girders poking through concrete
+    for (let g = 0; g < 4; g++) {
+      const girder = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 7.5), rebarTwistMat);
+      girder.position.set(-5 + g * 2.8, 1.4 + (g % 2) * 0.6, -4.8);
+      girder.rotation.set(0.35, g * 0.4, 0.2);
+      rubbleGroup.add(girder);
+    }
+
+    // Crushed civilian sedan under rubble
+    const crushedCarMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.5, metalness: 0.6 });
+    const crushedCarBody = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.9, 2.1), crushedCarMat);
+    crushedCarBody.position.set(1.5, 0.45, -8.2);
+    crushedCarBody.rotation.set(0.1, 0.25, -0.08);
+    rubbleGroup.add(crushedCarBody);
+
+    // Smoke plume from crushed engine
+    const smokeMat = new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.55 });
+    for (let sm = 0; sm < 3; sm++) {
+      const smokeRing = new THREE.Mesh(new THREE.RingGeometry(0.4 + sm * 0.3, 0.9 + sm * 0.5, 12), smokeMat);
+      smokeRing.rotateX(-Math.PI / 2);
+      smokeRing.position.set(1.5, 1.2 + sm * 0.8, -8.2);
+      rubbleGroup.add(smokeRing);
+      this.incidentSmokeRings.push({ mesh: smokeRing, startY: 1.2, speed: 1.2, offset: sm * 0.3 });
+    }
+
+    // Red flashing disaster beacon
+    const disasterBeacon = new THREE.PointLight(0xef4444, 3.0, 18);
+    disasterBeacon.position.set(0, 3.5, -6);
+    rubbleGroup.add(disasterBeacon);
+    this.incidentEmergencyBeacons.push({
+      light: disasterBeacon,
+      color1: 0xef4444,
+      color2: 0x3b82f6,
+      speed: 8.0,
+    });
+
+    this.scene.add(rubbleGroup);
+    this.collapsedRubbleGroup = rubbleGroup;
+
+    // 3. Clear previous mission hostages & spawn the 3 trapped survivors
+    this.missionHostages.forEach((h) => {
+      const idx = this.ai.civilians.findIndex((c) => c.id === h.id);
+      if (idx >= 0) {
+        if (this.ai.civilianRigs[idx]) {
+          this.scene.remove(this.ai.civilianRigs[idx].root);
+        }
+        this.ai.civilians.splice(idx, 1);
+        this.ai.civilianRigs.splice(idx, 1);
+      }
+    });
+    this.missionHostages = [];
+
+    const survivorList = [
+      { name: 'Leo Ramos (Ironworker)', pos: new THREE.Vector3(-27.5, 0, 44) },
+      { name: 'Sarah Jenkins (Pedestrian)', pos: new THREE.Vector3(-21.5, 0, 43) },
+      { name: 'Foreman Davies (Supervisor)', pos: new THREE.Vector3(-31.0, 0, 41) },
+    ];
+
+    survivorList.forEach((s) => {
+      const sRig = createCharacterMesh('civilian', 'hostage_bound', s.name);
+      this.scene.add(sRig.root);
+      const sCiv = this.ai.spawnCivilian(s.pos, sRig, { name: s.name });
+      sCiv.state = 'cowering';
+      (sCiv as any).health = 100;
+      (sCiv as any).maxHealth = 100;
+      (sCiv as any).isCaptive = true;
+      (sCiv as any).isRescued = false;
+      this.missionHostages.push(sCiv);
+    });
+
+    // 4. Spawn 3 Syndicate Fixers sent to burn the trailer safe
+    const fixers = [
+      { name: 'Sterling Fixer Lead', type: 'enforcer' as const, pos: new THREE.Vector3(-32, 0, 38) },
+      { name: 'Sterling Arsonist', type: 'thug' as const, pos: new THREE.Vector3(-35, 0, 39) },
+      { name: 'Sterling Guard', type: 'enforcer' as const, pos: new THREE.Vector3(-30, 0, 37) },
+    ];
+
+    fixers.forEach((f) => {
+      const rig = createCharacterMesh(f.type, 'default', f.name, 'eclipse_syndicate');
+      this.scene.add(rig.root);
+      const enemy = this.ai.spawnEnemy(f.type, f.pos, rig, f.name, 'eclipse_syndicate');
+      enemy.alertLevel = 100;
+      this.missionEnemies.push(enemy);
+    });
+
+    this.onNotification?.(
+      'DISPATCH: CODE 33! Building collapsed! Rescue trapped survivors and defend the trailer safe!',
+      'alert'
+    );
   }
 
   /**
@@ -3739,7 +3925,7 @@ export class GameEngine {
         civ.state = 'witnessing';
         civ.panicTimer = 18;
         this.addFloatingText('WITNESS REPORTED!', '#ef4444', civ.position);
-        this.onPedestrianShout?.(civ, `I saw that! Officer Carter is taking dirty payouts!`);
+        this.onNotification?.('WITNESS SHOUT: "I saw that! Officer Carter is taking dirty payouts!"', 'alert');
         this.onWitnessMisconductAlert?.(civ, description);
         break;
       }
@@ -4021,9 +4207,9 @@ export class GameEngine {
   /**
    * Returns closest evidence item if within forensic inspection distance
    */
-  public checkEvidenceNearby(
-    evidenceList: { position: { x: number; y: number; z: number }; id: string; title: string; collected: boolean; photoTaken?: boolean }[]
-  ) {
+  public checkEvidenceNearby<
+    T extends { position: { x: number; y: number; z: number }; id: string; title: string; collected: boolean; photoTaken?: boolean }
+  >(evidenceList: T[]): T | null {
     for (const ev of evidenceList) {
       const dist = this.playerPos.distanceTo(new THREE.Vector3(ev.position.x, 0, ev.position.z));
       if (dist < 3.8) {

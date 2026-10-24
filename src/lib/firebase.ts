@@ -9,6 +9,7 @@ export const db = initializeFirestore(
   app,
   {
     experimentalForceLongPolling: true,
+    ignoreUndefinedProperties: true,
   },
   firebaseConfig.firestoreDatabaseId
 );
@@ -65,13 +66,23 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 // Connection test helper per Firebase Skill
 export async function testConnection(): Promise<boolean> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Connection check timed out')), 4000)
+    );
+    await Promise.race([
+      getDocFromServer(doc(db, 'test', 'connection')),
+      timeoutPromise,
+    ]);
     return true;
   } catch (error: any) {
     if (
       error?.code === 'unavailable' ||
       (error instanceof Error &&
-        (error.message.includes('offline') || error.message.includes('unavailable') || error.message.includes('Could not reach')))
+        (error.message.includes('offline') ||
+          error.message.includes('unavailable') ||
+          error.message.includes('Could not reach') ||
+          error.message.includes('timed out') ||
+          error.message.includes('Backend didn\'t respond')))
     ) {
       // Graceful offline operation - local storage persistence is active
       return false;

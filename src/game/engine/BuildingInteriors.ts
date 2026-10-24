@@ -14,7 +14,12 @@ export type InteriorInteractableType =
   | 'duty_desk'
   | 'store_counter'
   | 'backroom_safe'
-  | 'exit_door';
+  | 'exit_door'
+  | 'bed_sleep'
+  | 'wardrobe_closet'
+  | 'desk_save'
+  | 'mission_phone'
+  | 'kitchen_fridge';
 
 export interface InteriorInteractable {
   id: string;
@@ -46,6 +51,15 @@ export interface ActiveInteriorState {
 }
 
 export const ENTERABLE_BUILDINGS: Record<EnterableBuildingId, EnterableBuilding> = {
+  carter_house: {
+    id: 'carter_house',
+    name: "Officer Carter's Residence",
+    category: 'safehouse',
+    exteriorPos: { x: -52, y: 0.22, z: -52 },
+    entranceRadius: 4.2,
+    description: "Officer Carter's private home. Furnished bedroom, kitchen, living room, bathroom, wardrobe, bed to advance time, save desk, and mission phone.",
+    tagline: 'OFFICER ALEX CARTER · PRIVATE HOME',
+  },
   metro_bank: {
     id: 'metro_bank',
     name: '1st National Metro Bank',
@@ -87,6 +101,7 @@ export function buildBuildingInterior(id: EnterableBuildingId): ActiveInteriorSt
   let origin = new THREE.Vector3(200, 0, 200);
   if (id === 'precinct_9') origin = new THREE.Vector3(-200, 0, 200);
   if (id === 'cedar_market') origin = new THREE.Vector3(200, 0, -200);
+  if (id === 'carter_house') origin = new THREE.Vector3(-200, 0, -200);
 
   interiorGroup.position.copy(origin);
 
@@ -645,7 +660,7 @@ export function buildBuildingInterior(id: EnterableBuildingId): ActiveInteriorSt
   // ==========================================================================
   // 3. EASTSIDE BODEGA & 24/7 MARKET INTERIOR
   // ==========================================================================
-  else {
+  else if (id === 'cedar_market') {
     const roomWidth = 18;
     const roomDepth = 16;
     const roomHeight = 5.0;
@@ -733,11 +748,334 @@ export function buildBuildingInterior(id: EnterableBuildingId): ActiveInteriorSt
     });
   }
 
+  // ==========================================================================
+  // 4. OFFICER CARTER'S RESIDENCE (Furnished Home)
+  // Living Room, Master Bedroom, Kitchen & Dining, Bathroom, Front Exit
+  // ==========================================================================
+  else if (id === 'carter_house') {
+    const roomWidth = 22;
+    const roomDepth = 18;
+    const roomHeight = 4.6;
+
+    // Hardwood polished floor
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), wallWoodPanels);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    interiorGroup.add(floor);
+
+    // Ceiling
+    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomDepth), wallPlasterMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = roomHeight;
+    interiorGroup.add(ceiling);
+
+    // Ambient warm lights
+    const livingLight = new THREE.PointLight(0xfef3c7, 1.3, 18);
+    livingLight.position.set(0, roomHeight - 0.5, 3.5);
+    interiorGroup.add(livingLight);
+
+    const bedroomLight = new THREE.PointLight(0xfde68a, 1.1, 14);
+    bedroomLight.position.set(-6.5, roomHeight - 0.5, -3.0);
+    interiorGroup.add(bedroomLight);
+
+    const kitchenLight = new THREE.PointLight(0xfffbeb, 1.2, 14);
+    kitchenLight.position.set(6.5, roomHeight - 0.5, -3.0);
+    interiorGroup.add(kitchenLight);
+
+    // Outer Perimeter Walls
+    // Back wall (North: Z = -9)
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, roomHeight, 0.5), wallPlasterMat);
+    backWall.position.set(0, roomHeight / 2, -9);
+    interiorGroup.add(backWall);
+    addInteriorCollision(0, -9, roomWidth, 0.6, roomHeight);
+
+    // Left wall (West: X = -11)
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    leftWall.position.set(-11, roomHeight / 2, 0);
+    interiorGroup.add(leftWall);
+    addInteriorCollision(-11, 0, 0.6, roomDepth, roomHeight);
+
+    // Right wall (East: X = 11)
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, roomHeight, roomDepth), wallPlasterMat);
+    rightWall.position.set(11, roomHeight / 2, 0);
+    interiorGroup.add(rightWall);
+    addInteriorCollision(11, 0, 0.6, roomDepth, roomHeight);
+
+    // Front wall (South: Z = 9) with doorway opening for front entrance
+    const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(9.5, roomHeight, 0.5), wallPlasterMat);
+    frontWallL.position.set(-6.25, roomHeight / 2, 9);
+    interiorGroup.add(frontWallL);
+    addInteriorCollision(-6.25, 9, 9.5, 0.6, roomHeight);
+
+    const frontWallR = new THREE.Mesh(new THREE.BoxGeometry(9.5, roomHeight, 0.5), wallPlasterMat);
+    frontWallR.position.set(6.25, roomHeight / 2, 9);
+    interiorGroup.add(frontWallR);
+    addInteriorCollision(6.25, 9, 9.5, 0.6, roomHeight);
+
+    // Front Exit Door
+    interactiveObjects.push({
+      id: 'carter_house_exit',
+      type: 'exit_door',
+      name: 'Front Door',
+      prompt: 'EXIT TO DRIVEWAY & METRO CITY',
+      position: { x: origin.x, y: 0.2, z: origin.z + 8.0 },
+      radius: 2.6,
+      icon: 'door',
+    });
+
+    // Interior Partition Walls
+    // Bedroom West Partition (X: -2.5, Z: -9 to 2) with doorway gap
+    const bedPartition = new THREE.Mesh(new THREE.BoxGeometry(0.4, roomHeight, 8), wallPlasterMat);
+    bedPartition.position.set(-2.5, roomHeight / 2, -4);
+    interiorGroup.add(bedPartition);
+    addInteriorCollision(-2.5, -4, 0.5, 8, roomHeight);
+
+    // Kitchen East Partition (X: 2.5, Z: -9 to 2)
+    const kitchenPartition = new THREE.Mesh(new THREE.BoxGeometry(0.4, roomHeight, 8), wallPlasterMat);
+    kitchenPartition.position.set(2.5, roomHeight / 2, -4);
+    interiorGroup.add(kitchenPartition);
+    addInteriorCollision(2.5, -4, 0.5, 8, roomHeight);
+
+    // Bathroom North Divider (Z: -4.5, X: -2.5 to 2.5)
+    const bathBack = new THREE.Mesh(new THREE.BoxGeometry(5.0, roomHeight, 0.4), wallPlasterMat);
+    bathBack.position.set(0, roomHeight / 2, -4.5);
+    interiorGroup.add(bathBack);
+    addInteriorCollision(0, -4.5, 5.0, 0.5, roomHeight);
+
+    // ------------------------------------------------------------------------
+    // ROOM 1: LIVING ROOM (Center, Entryway)
+    // ------------------------------------------------------------------------
+    // Cozy Area Rug
+    const rug = new THREE.Mesh(
+      new THREE.PlaneGeometry(5.0, 4.0),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.9 })
+    );
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(0, 0.015, 3.5);
+    interiorGroup.add(rug);
+
+    // Navy Living Room Sofa
+    const sofaMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
+    const sofa = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.0, 1.4), sofaMat);
+    sofa.position.set(0, 0.5, 4.8);
+    interiorGroup.add(sofa);
+    addInteriorCollision(0, 4.8, 3.6, 1.4, 1.0);
+
+    // Wooden Coffee Table
+    const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.45, 1.0), wallWoodPanels);
+    coffeeTable.position.set(0, 0.25, 3.0);
+    interiorGroup.add(coffeeTable);
+    addInteriorCollision(0, 3.0, 2.2, 1.0, 0.5);
+
+    // Media Console & TV
+    const tvStand = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.7, 0.7), darkTileFloorMat);
+    tvStand.position.set(0, 0.35, 0.5);
+    interiorGroup.add(tvStand);
+    addInteriorCollision(0, 0.5, 3.0, 0.7, 0.7);
+
+    const tvScreen = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 1.5, 0.1),
+      new THREE.MeshBasicMaterial({ color: 0x0284c7 })
+    );
+    tvScreen.position.set(0, 1.5, 0.5);
+    interiorGroup.add(tvScreen);
+
+    // Secure Mission Phone & Investigation Board
+    const missionDesk = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.9, 0.8), wallWoodPanels);
+    missionDesk.position.set(5.5, 0.45, 7.5);
+    interiorGroup.add(missionDesk);
+    addInteriorCollision(5.5, 7.5, 1.6, 0.8, 0.9);
+
+    const phoneMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35, 0.2, 0.35),
+      new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.4 })
+    );
+    phoneMesh.position.set(5.5, 0.95, 7.5);
+    interiorGroup.add(phoneMesh);
+
+    // Phone Indicator Ring
+    const phoneRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 20), neonGoldMat);
+    phoneRing.rotation.x = -Math.PI / 2;
+    phoneRing.position.set(5.5, 0.02, 6.4);
+    interiorGroup.add(phoneRing);
+
+    interactiveObjects.push({
+      id: 'carter_mission_phone',
+      type: 'mission_phone',
+      name: 'Precinct Secure Hotline & Mission Board',
+      prompt: 'CHECK DISPATCH PHONE & ASSIGNMENTS',
+      position: { x: origin.x + 5.5, y: 0.5, z: origin.z + 6.4 },
+      radius: 2.4,
+      icon: 'phone',
+    });
+
+    // ------------------------------------------------------------------------
+    // ROOM 2: MASTER BEDROOM (West Wing: X < -2.5)
+    // ------------------------------------------------------------------------
+    // Large Queen Bed
+    const bedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.55, 3.4), wallWoodPanels);
+    bedFrame.position.set(-7.5, 0.3, -2.5);
+    interiorGroup.add(bedFrame);
+
+    const headboard = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.6, 0.3), wallWoodPanels);
+    headboard.position.set(-7.5, 1.0, -4.1);
+    interiorGroup.add(headboard);
+
+    const mattress = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 0.45, 3.2),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.9 })
+    );
+    mattress.position.set(-7.5, 0.7, -2.5);
+    interiorGroup.add(mattress);
+    addInteriorCollision(-7.5, -2.7, 2.8, 3.4, 1.6);
+
+    // Bed Sleep Marker
+    const bedRing = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.05, 24), neonCyanMat);
+    bedRing.rotation.x = -Math.PI / 2;
+    bedRing.position.set(-5.2, 0.02, -2.5);
+    interiorGroup.add(bedRing);
+
+    interactiveObjects.push({
+      id: 'carter_bed_sleep',
+      type: 'bed_sleep',
+      name: "Officer Carter's Bed",
+      prompt: 'REST IN BED (Advance In-Game Time & Full Health Restore)',
+      position: { x: origin.x - 5.2, y: 0.5, z: origin.z - 2.5 },
+      radius: 2.6,
+      icon: 'bed',
+    });
+
+    // Wardrobe Closet
+    const wardrobeMesh = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3.2, 1.0), wallWoodPanels);
+    wardrobeMesh.position.set(-7.5, 1.6, -7.5);
+    interiorGroup.add(wardrobeMesh);
+
+    const mirror = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 2.2), glassPartitionMat);
+    mirror.position.set(-7.5, 1.6, -6.98);
+    interiorGroup.add(mirror);
+    addInteriorCollision(-7.5, -7.5, 2.2, 1.0, 3.2);
+
+    const wardrobeRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 20), neonGoldMat);
+    wardrobeRing.rotation.x = -Math.PI / 2;
+    wardrobeRing.position.set(-7.5, 0.02, -6.0);
+    interiorGroup.add(wardrobeRing);
+
+    interactiveObjects.push({
+      id: 'carter_wardrobe',
+      type: 'wardrobe_closet',
+      name: 'Officer Wardrobe & Uniform Closet',
+      prompt: 'OPEN WARDROBE (Change Outfits & Equipment)',
+      position: { x: origin.x - 7.5, y: 0.5, z: origin.z - 6.0 },
+      radius: 2.4,
+      icon: 'shirt',
+    });
+
+    // Save Desk & Police Logbook
+    const studyDesk = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.1), wallWoodPanels);
+    studyDesk.position.set(-7.5, 0.45, 3.5);
+    interiorGroup.add(studyDesk);
+    addInteriorCollision(-7.5, 3.5, 2.2, 1.1, 0.9);
+
+    const laptop = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.08, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.8, roughness: 0.3 })
+    );
+    laptop.position.set(-7.5, 0.95, 3.5);
+    interiorGroup.add(laptop);
+
+    const deskRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 20), neonGreenMat);
+    deskRing.rotation.x = -Math.PI / 2;
+    deskRing.position.set(-7.5, 0.02, 2.3);
+    interiorGroup.add(deskRing);
+
+    interactiveObjects.push({
+      id: 'carter_save_desk',
+      type: 'desk_save',
+      name: 'Officer Police Terminal & Study Desk',
+      prompt: 'SAVE CAREER PROGRESS (Cloud & Local Sync)',
+      position: { x: origin.x - 7.5, y: 0.5, z: origin.z + 2.3 },
+      radius: 2.4,
+      icon: 'save',
+    });
+
+    // ------------------------------------------------------------------------
+    // ROOM 3: KITCHEN & DINING (East Wing: X > 2.5)
+    // ------------------------------------------------------------------------
+    // Kitchen Countertops (L-Shape)
+    const counterA = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.1, 5.0), marbleFloorMat);
+    counterA.position.set(9.5, 0.55, -4.0);
+    interiorGroup.add(counterA);
+    addInteriorCollision(9.5, -4.0, 1.2, 5.0, 1.1);
+
+    const counterB = new THREE.Mesh(new THREE.BoxGeometry(3.5, 1.1, 1.2), marbleFloorMat);
+    counterB.position.set(7.2, 0.55, -6.0);
+    interiorGroup.add(counterB);
+    addInteriorCollision(7.2, -6.0, 3.5, 1.2, 1.1);
+
+    // Refrigerator
+    const fridge = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.8, 1.3), brushedSteelMat);
+    fridge.position.set(9.5, 1.4, -0.5);
+    interiorGroup.add(fridge);
+    addInteriorCollision(9.5, -0.5, 1.4, 1.3, 2.8);
+
+    const fridgeRing = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 20), neonGreenMat);
+    fridgeRing.rotation.x = -Math.PI / 2;
+    fridgeRing.position.set(8.2, 0.02, -0.5);
+    interiorGroup.add(fridgeRing);
+
+    interactiveObjects.push({
+      id: 'carter_kitchen_fridge',
+      type: 'kitchen_fridge',
+      name: 'Kitchen Pantry & Refrigerator',
+      prompt: 'REPLENISH HEALTH & RATIONS (+25 HP)',
+      position: { x: origin.x + 8.2, y: 0.5, z: origin.z - 0.5 },
+      radius: 2.4,
+      icon: 'fridge',
+    });
+
+    // Kitchen Dining Island with Barstools
+    const island = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 3.0), wallWoodPanels);
+    island.position.set(5.5, 0.55, 1.5);
+    interiorGroup.add(island);
+    addInteriorCollision(5.5, 1.5, 1.6, 3.0, 1.1);
+
+    // ------------------------------------------------------------------------
+    // ROOM 4: BATHROOM (North Center: X: -2.0 to 2.0, Z: -8.5 to -5.0)
+    // ------------------------------------------------------------------------
+    const bathFloor = new THREE.Mesh(new THREE.PlaneGeometry(4.0, 3.5), darkTileFloorMat);
+    bathFloor.rotation.x = -Math.PI / 2;
+    bathFloor.position.set(0, 0.015, -6.8);
+    interiorGroup.add(bathFloor);
+
+    // Vanity Mirror & Sink
+    const vanity = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.0, 0.8), wallPlasterMat);
+    vanity.position.set(0, 0.5, -8.4);
+    interiorGroup.add(vanity);
+    addInteriorCollision(0, -8.4, 1.8, 0.8, 1.0);
+
+    const bathMirror = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.2), glassPartitionMat);
+    bathMirror.position.set(0, 1.7, -8.74);
+    interiorGroup.add(bathMirror);
+
+    // Shower Glass Stall
+    const shower = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.6, 1.4), glassPartitionMat);
+    shower.position.set(-1.8, 1.3, -6.5);
+    interiorGroup.add(shower);
+    addInteriorCollision(-1.8, -6.5, 1.4, 1.4, 2.6);
+  }
+
   // Spawn position inside building: facing inwards into the room safely in front of exit
   const interiorSpawnPos = {
     x: origin.x,
     y: 0.0,
-    z: id === 'metro_bank' ? origin.z + 7.2 : id === 'precinct_9' ? origin.z + 5.5 : origin.z + 4.0,
+    z:
+      id === 'metro_bank'
+        ? origin.z + 7.2
+        : id === 'precinct_9'
+        ? origin.z + 5.5
+        : id === 'carter_house'
+        ? origin.z + 5.0
+        : origin.z + 4.0,
   };
 
   return {
